@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Runtime.InteropServices;
 using Adaptive.Aeron.LogBuffer;
+using Adaptive.Aeron.Status;
 using Adaptive.Agrona;
 using Adaptive.Agrona.Collections;
 
@@ -37,18 +38,20 @@ namespace Adaptive.Aeron
         internal readonly int streamId;
         internal volatile bool isClosed;
         internal volatile Image[] images;
-        internal readonly ClientConductor clientConductor;
+        internal readonly HashSet<long> imageIdSet;
+        internal readonly ClientConductor conductor;
         internal readonly string channel;
         internal readonly AvailableImageHandler availableImageHandler;
         internal readonly UnavailableImageHandler unavailableImageHandler;
+        internal int channelStatusId;
 
         // padding to prevent false sharing
         private CacheLinePadding _padding2;
 
         internal SubscriptionFields(
-            long registrationId, 
-            int streamId, 
-            ClientConductor clientConductor, 
+            long registrationId,
+            int streamId,
+            ClientConductor clientConductor,
             string channel,
             AvailableImageHandler availableImageHandler,
             UnavailableImageHandler unavailableImageHandler)
@@ -58,13 +61,15 @@ namespace Adaptive.Aeron
 
             this.registrationId = registrationId;
             this.streamId = streamId;
-            this.clientConductor = clientConductor;
+            this.conductor = clientConductor;
             this.channel = channel;
             this.availableImageHandler = availableImageHandler;
             this.unavailableImageHandler = unavailableImageHandler;
             roundRobinIndex = 0;
             isClosed = false;
             images = EMPTY_ARRAY;
+            imageIdSet = new HashSet<long>();
+            channelStatusId = 0;
         }
     }
 
@@ -85,7 +90,7 @@ namespace Adaptive.Aeron
     /// <b>Note:</b>Subscriptions are not threadsafe and should not be shared between subscribers.
     /// </summary>
     /// <seealso cref="FragmentAssembler"/>
-    /// <seealso cref="IControlledFragmentHandler"/>
+    /// <seealso cref="ControlledFragmentHandler"/>
     /// <seealso cref="Aeron.AddSubscription(string, int)"/>
     /// <seealso cref="Aeron.AddSubscription(string, int, AvailableImageHandler, UnavailableImageHandler)"/>
     public class Subscription : IDisposable
@@ -93,13 +98,13 @@ namespace Adaptive.Aeron
         private SubscriptionFields _fields;
 
         internal Subscription(
-            ClientConductor conductor, 
-            string channel, 
-            int streamId, 
+            ClientConductor conductor,
+            string channel,
+            int streamId,
             long registrationId,
             AvailableImageHandler availableImageHandler,
             UnavailableImageHandler unavailableImageHandler)
-        { 
+        {
             _fields = new SubscriptionFields(registrationId, streamId, conductor, channel, availableImageHandler, unavailableImageHandler);
         }
 
@@ -156,7 +161,6 @@ namespace Adaptive.Aeron
             return numberEndOfStreams;
         }
 
-
         /// <summary>
         /// Poll the <seealso cref="Image"/>s under the subscription for available message fragments.
         /// <para>
@@ -172,6 +176,26 @@ namespace Adaptive.Aeron
         /// <param name="fragmentLimit">   number of message fragments to limit for the poll operation across multiple <seealso cref="Image"/>s. </param>
         /// <returns> the number of fragments received </returns>
         public int Poll(FragmentHandler fragmentHandler, int fragmentLimit)
+        {
+            var handler = HandlerHelper.ToFragmentHandler(fragmentHandler);
+            return Poll(handler, fragmentLimit);
+        }
+        
+        /// <summary>
+        /// Poll the <seealso cref="Image"/>s under the subscription for available message fragments.
+        /// <para>
+        /// Each fragment read will be a whole message if it is under MTU length. If larger than MTU then it will come
+        /// as a series of fragments ordered within a session.
+        /// </para>
+        /// <para>
+        /// To assemble messages that span multiple fragments then use <seealso cref="FragmentAssembler"/>.
+        /// 
+        /// </para>
+        /// </summary>
+        /// <param name="fragmentHandler"> callback for handling each message fragment as it is read. </param>
+        /// <param name="fragmentLimit">   number of message fragments to limit for the poll operation across multiple <seealso cref="Image"/>s. </param>
+        /// <returns> the number of fragments received </returns>
+        public int Poll(IFragmentHandler fragmentHandler, int fragmentLimit)
         {
             var images = _fields.images;
             var length = images.Length;
@@ -213,7 +237,7 @@ namespace Adaptive.Aeron
         /// <param name="fragmentLimit">   number of message fragments to limit for the poll operation across multiple <seealso cref="Image"/>s. </param>
         /// <returns> the number of fragments received </returns>
         /// <seealso cref="ControlledFragmentHandler" />
-        public int ControlledPoll(ControlledFragmentHandler fragmentHandler, int fragmentLimit)
+        public int ControlledPoll(IControlledFragmentHandler fragmentHandler, int fragmentLimit)
         {
             var images = _fields.images;
             var length = images.Length;
@@ -236,6 +260,29 @@ namespace Adaptive.Aeron
             }
 
             return fragmentsRead;
+        }
+
+        /// <summary>
+        /// Poll in a controlled manner the <seealso cref="Image"/>s under the subscription for available message fragments.
+        /// Control is applied to fragments in the stream. If more fragments can be read on another stream
+        /// they will even if BREAK or ABORT is returned from the fragment handler.
+        /// <para>
+        /// Each fragment read will be a whole message if it is under MTU length. If larger than MTU then it will come
+        /// as a series of fragments ordered within a session.
+        /// </para>
+        /// <para>
+        /// To assemble messages that span multiple fragments then use <seealso cref="ControlledFragmentAssembler"/>.
+        ///     
+        /// </para>
+        /// </summary>
+        /// <param name="fragmentHandler"> callback for handling each message fragment as it is read. </param>
+        /// <param name="fragmentLimit">   number of message fragments to limit for the poll operation across multiple <seealso cref="Image"/>s. </param>
+        /// <returns> the number of fragments received </returns>
+        /// <seealso cref="ControlledFragmentHandler" />
+        public int ControlledPoll(ControlledFragmentHandler fragmentHandler, int fragmentLimit)
+        {
+            var handler = HandlerHelper.ToControlledFragmentHandler(fragmentHandler);
+            return ControlledPoll(handler, fragmentLimit);
         }
 
         /// <summary>
@@ -280,6 +327,12 @@ namespace Adaptive.Aeron
 
         //    return bytesConsumed;
         //}
+
+        /// <summary>
+        /// Is this subscription connected by having at least one publication <seealso cref="Image"/>.
+        /// </summary>
+        /// <returns> true if this subscription connected by having at least one publication <seealso cref="Image"/>. </returns>
+        public bool IsConnected => _fields.images.Length > 0;
 
         /// <summary>
         /// Has the subscription currently no images connected to it?
@@ -357,22 +410,7 @@ namespace Adaptive.Aeron
         public void Dispose()
 #endif
         {
-            _fields.clientConductor.ClientLock().Lock() ;
-            try
-            {
-                if (!_fields.isClosed)
-                {
-                    _fields.isClosed = true;
-
-                    CloseImages();
-
-                    _fields.clientConductor.ReleaseSubscription(this);
-                }
-            }
-            finally
-            {
-                _fields.clientConductor.ClientLock().Unlock();
-            }
+            _fields.conductor.ReleaseSubscription(this);
         }
 
         /// <summary>
@@ -381,25 +419,58 @@ namespace Adaptive.Aeron
         /// <returns> true if it has been closed otherwise false. </returns>
         public bool Closed => _fields.isClosed;
 
-        internal void ForceClose()
-        {
-            _fields.isClosed = true;
-
-            CloseImages();
-
-            _fields.clientConductor.AsyncReleaseSubscription(this);
-        }
-
-
-    internal void AddImage(Image image)
+        
+        /// <summary>
+        /// Get the status of the media channel for this Subscription.
+        /// <para>
+        /// The status will be <seealso cref="ChannelEndpointStatus.ERRORED"/> if a socket exception occurs on setup
+        /// and <seealso cref="ChannelEndpointStatus.ACTIVE"/> if all is well.
+        /// 
+        /// </para>
+        /// </summary>
+        /// <returns> status for the channel as one of the constants from <seealso cref="ChannelEndpointStatus"/> with it being
+        /// <seealso cref="ChannelEndpointStatus.NO_ID_ALLOCATED"/> if the subscription is closed. </returns>
+        /// <seealso cref="ChannelEndpointStatus"></seealso>
+        public long ChannelStatus()
         {
             if (_fields.isClosed)
             {
-                _fields.clientConductor.LingerResource(image.ManagedResource());
+                return ChannelEndpointStatus.NO_ID_ALLOCATED;
+            }
+
+            return _fields.conductor.ChannelStatus(ChannelStatusId);
+        }
+
+        internal int ChannelStatusId
+        {
+            get => _fields.channelStatusId;
+            set => _fields.channelStatusId = value;
+        }
+       
+        internal void InternalClose()
+        {
+            _fields.isClosed = true;
+            CloseImages();
+        }
+
+        internal virtual bool ContainsImage(long correlationId)
+        {
+            return _fields.imageIdSet.Contains(correlationId);
+        }
+
+        internal void AddImage(Image image)
+        {
+            if (_fields.isClosed)
+            {
+                image.Close();
+                _fields.conductor.ReleaseImage(image);
             }
             else
             {
-                _fields.images = ArrayUtil.Add(_fields.images, image);
+                if (_fields.imageIdSet.Add(image.CorrelationId))
+                {
+                    _fields.images = ArrayUtil.Add(_fields.images, image);
+                }
             }
         }
 
@@ -408,45 +479,43 @@ namespace Adaptive.Aeron
             var oldArray = _fields.images;
             Image removedImage = null;
 
-            foreach (var image in oldArray)
+            if (_fields.imageIdSet.Remove(correlationId))
             {
-                if (image.CorrelationId == correlationId)
+                int i = 0;
+                foreach (var image in oldArray)
                 {
-                    removedImage = image;
-                    break;
-                }
-            }
+                    if (image.CorrelationId == correlationId)
+                    {
+                        removedImage = image;
+                        break;
+                    }
 
-            if (null != removedImage)
-            {
+                    i++;
+                }
+                
                 _fields.images = ArrayUtil.Remove(oldArray, removedImage);
-                _fields.clientConductor.LingerResource(removedImage.ManagedResource());
+                removedImage.Close();
+                _fields.conductor.ReleaseImage(removedImage);
             }
-
+          
             return removedImage;
-        }
-
-        internal bool HasImage(long correlationId)
-        {
-            var hasImage = false;
-
-            foreach (var image in _fields.images)
-            {
-                if (correlationId == image.CorrelationId)
-                {
-                    hasImage = true;
-                    break;
-                }
-            }
-
-            return hasImage;
         }
 
         private void CloseImages()
         {
+            var images = _fields.images;
+            _fields.images = SubscriptionFields.EMPTY_ARRAY;
+
+            foreach (var image in images)
+            {
+                image.Close();
+            }
+
+            _fields.imageIdSet.Clear();
+
             foreach (Image image in _fields.images)
             {
-                _fields.clientConductor.LingerResource(image.ManagedResource());
+                _fields.conductor.ReleaseImage(image);
 
                 try
                 {
@@ -457,11 +526,9 @@ namespace Adaptive.Aeron
                 }
                 catch (Exception ex)
                 {
-                    _fields.clientConductor.HandleError(ex);
+                    _fields.conductor.HandleError(ex);
                 }
             }
-
-            _fields.images = new Image[0];
         }
-}
+    }
 }

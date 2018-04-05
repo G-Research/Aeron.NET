@@ -37,7 +37,7 @@ namespace Adaptive.Aeron
             }
         }
 
-        public static string GetProperty(string propertyName, string defaultValue)
+        public static string GetProperty(string propertyName, string defaultValue = null)
         {
             string value;
             return Params.TryGetValue(propertyName, out value) ? value : defaultValue;
@@ -61,6 +61,16 @@ namespace Adaptive.Aeron
             string strValue;
             long value;
             return Params.TryGetValue(propertyName, out strValue) && long.TryParse(strValue, out value) ? value : defaultValue;
+        }
+
+        public static long GetDurationInNanos(string propertyName, long defaultValue)
+        {
+            return GetLong(propertyName, defaultValue);
+        }
+
+        public static int GetSizeAsInt(string propertyName, int defaultValue)
+        {
+            return GetInteger(propertyName, defaultValue);
         }
     }
 }

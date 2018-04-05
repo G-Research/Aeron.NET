@@ -43,7 +43,7 @@ namespace Adaptive.Aeron.Samples.Pong
             var ctx = new Aeron.Context()
                 .AvailableImageHandler(SamplesUtil.PrintAvailableImage)
                 .UnavailableImageHandler(SamplesUtil.PrintUnavailableImage);
-            
+
             IIdleStrategy idleStrategy = new BusySpinIdleStrategy();
 
             Console.WriteLine("Subscribing Ping at " + PingChannel + " on stream Id " + PingStreamID);
@@ -56,7 +56,9 @@ namespace Adaptive.Aeron.Samples.Pong
             using (var pongPublication = aeron.AddPublication(PongChannel, PongStreamID))
             using (var pingSubscription = aeron.AddSubscription(PingChannel, PingStreamID))
             {
-                FragmentHandler dataHandler = (buffer, offset, length, header) => PingHandler(pongPublication, buffer, offset, length);
+                var dataHandler = HandlerHelper.ToFragmentHandler(
+                    (buffer, offset, length, header) => PingHandler(pongPublication, buffer, offset, length)
+                );
 
                 while (running)
                 {
@@ -67,7 +69,7 @@ namespace Adaptive.Aeron.Samples.Pong
             }
         }
 
-        public static void PingHandler(Publication pongPublication, UnsafeBuffer buffer, int offset, int length)
+        private static void PingHandler(Publication pongPublication, IDirectBuffer buffer, int offset, int length)
         {
             if (pongPublication.Offer(buffer, offset, length) > 0L)
             {

@@ -64,10 +64,10 @@ namespace Adaptive.Agrona.Concurrent.Status
             return _buffer.GetLong(_offset);
         }
 
-        public override long Volatile
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public override long GetVolatile()
         {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get { return _buffer.GetLongVolatile(_offset); }
+            return _buffer.GetLongVolatile(_offset);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -80,6 +80,12 @@ namespace Adaptive.Agrona.Concurrent.Status
         public override void SetOrdered(long value)
         {
             _buffer.PutLongOrdered(_offset, value);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public override void SetVolatile(long value)
+        {
+            _buffer.PutLongVolatile(_offset, value);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

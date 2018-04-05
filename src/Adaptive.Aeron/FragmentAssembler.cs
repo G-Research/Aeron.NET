@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-using System;
 using System.Collections.Generic;
 using Adaptive.Aeron.LogBuffer;
 using Adaptive.Agrona;
@@ -38,19 +37,21 @@ namespace Adaptive.Aeron
     /// <see cref="Subscription.Poll"/>
     /// <see cref="Image.Poll"/>
     /// </summary>
-    public class FragmentAssembler
+    public class FragmentAssembler : IFragmentHandler
     {
         private readonly int _initialBufferLength;
-        private readonly FragmentHandler _delegate;
+        private readonly IFragmentHandler _delegate;
         private readonly Dictionary<int, BufferBuilder> _builderBySessionIdMap = new Dictionary<int, BufferBuilder>();
-        
 
         /// <summary>
-        /// Construct an adapter to reassemble message fragments and delegate on whole messages.
+        /// Construct an adapter to reassemble message fragments and _delegate on only whole messages.
         /// </summary>
-        /// <param name="fragmentHandler"> onto which whole messages are forwarded. </param>
-        public FragmentAssembler(FragmentHandler fragmentHandler) : this(fragmentHandler, BufferBuilder.MIN_ALLOCATED_CAPACITY)
+        /// <param name="fragmentHandler">            onto which whole messages are forwarded. </param>
+        /// <param name="initialBufferLength"> to be used for each session. </param>
+        public FragmentAssembler(IFragmentHandler fragmentHandler, int initialBufferLength = BufferBuilder.MIN_ALLOCATED_CAPACITY)
         {
+            _initialBufferLength = initialBufferLength;
+            _delegate = fragmentHandler;
         }
 
         /// <summary>
@@ -58,35 +59,35 @@ namespace Adaptive.Aeron
         /// </summary>
         /// <param name="fragmentHandler">            onto which whole messages are forwarded. </param>
         /// <param name="initialBufferLength"> to be used for each session. </param>
-        public FragmentAssembler(FragmentHandler fragmentHandler, int initialBufferLength)
+        public FragmentAssembler(FragmentHandler fragmentHandler, int initialBufferLength = BufferBuilder.MIN_ALLOCATED_CAPACITY)
         {
             _initialBufferLength = initialBufferLength;
-            _delegate = fragmentHandler;
+            _delegate = HandlerHelper.ToFragmentHandler(fragmentHandler);
         }
 
         /// <summary>
         /// Get the delegate unto which assembled messages are delegated.
         /// </summary>
         /// <returns> the delegate unto which assembled messages are delegated.</returns>
-        public FragmentHandler Delegate()
+        public IFragmentHandler Delegate()
         {
             return _delegate;
         }
 
         /// <summary>
-        /// The implementation of <seealso cref="FragmentHandler"/> that reassembles and forwards whole messages.
+        /// The implementation of <seealso cref="IFragmentHandler"/> that reassembles and forwards whole messages.
         /// </summary>
         /// <param name="buffer"> containing the data. </param>
         /// <param name="offset"> at which the data begins. </param>
         /// <param name="length"> of the data in bytes. </param>
         /// <param name="header"> representing the meta data for the data. </param>
-        public void OnFragment(UnsafeBuffer buffer, int offset, int length, Header header)
+        public void OnFragment(IDirectBuffer buffer, int offset, int length, Header header)
         {
             byte flags = header.Flags;
 
             if ((flags & FrameDescriptor.UNFRAGMENTED) == FrameDescriptor.UNFRAGMENTED)
             {
-                _delegate(buffer, offset, length, header);
+                _delegate.OnFragment(buffer, offset, length, header);
             }
             else
             {
@@ -94,7 +95,7 @@ namespace Adaptive.Aeron
             }
         }
 
-        private void HandleFragment(UnsafeBuffer buffer, int offset, int length, Header header, byte flags)
+        private void HandleFragment(IDirectBuffer buffer, int offset, int length, Header header, byte flags)
         {
             if ((flags & FrameDescriptor.BEGIN_FRAG_FLAG) == FrameDescriptor.BEGIN_FRAG_FLAG)
             {
@@ -109,7 +110,6 @@ namespace Adaptive.Aeron
             }
             else
             {
-
                 BufferBuilder builder;
                 _builderBySessionIdMap.TryGetValue(header.SessionId, out builder);
                 if (null != builder && builder.Limit() != 0)
@@ -119,7 +119,7 @@ namespace Adaptive.Aeron
                     if ((flags & FrameDescriptor.END_FRAG_FLAG) == FrameDescriptor.END_FRAG_FLAG)
                     {
                         int msgLength = builder.Limit();
-                        _delegate(builder.Buffer(), 0, msgLength, header);
+                        _delegate.OnFragment(builder.Buffer(), 0, msgLength, header);
                         builder.Reset();
                     }
                 }
@@ -139,8 +139,10 @@ namespace Adaptive.Aeron
                 _builderBySessionIdMap.Remove(sessionId);
                 return true;
             }
+
             return false;
         }
+
         /// <summary>
         /// Clear down the cache of buffers by session for reassembling messages.
         /// </summary>
