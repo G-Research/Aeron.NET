@@ -402,6 +402,16 @@ namespace Adaptive.Aeron
                 Path.Combine(IoUtil.TmpDirName(), "aeron-" + Environment.UserName);
 
             /// <summary>
+            /// Media type used for IPC shared memory from <seealso cref="Publication"/> to <seealso cref="Subscription"/> channels.
+            /// </summary>
+            public const string IPC_MEDIA = "ipc";
+
+            /// <summary>
+            /// Media type used for UDP sockets from <seealso cref="Publication"/> to <seealso cref="Subscription"/> channels.
+            /// </summary>
+            public const string UDP_MEDIA = "udp";
+
+            /// <summary>
             /// URI used for IPC <seealso cref="Publication"/>s and  <seealso cref="Subscription"/>s
             /// </summary>
             public const string IPC_CHANNEL = "aeron:ipc";
@@ -427,6 +437,11 @@ namespace Adaptive.Aeron
             /// Timeout in which the driver is expected to respond.
             /// </summary>
             public const long DRIVER_TIMEOUT_MS = 10000;
+
+            /// <summary>
+            /// Value to represent a sessionId that is not to be used.
+            /// </summary>
+            public const int NULL_SESSION_ID = -1;
 
             /// <summary>
             /// Initial term id to be used when creating an <seealso cref="ExclusivePublication"/>.
@@ -527,14 +542,14 @@ namespace Adaptive.Aeron
 
                 return this;
             }
-            
+
             /// <summary>
             /// Perform a shallow copy of the object.
             /// </summary>
             /// <returns> a shallow copy of the object. </returns>
             public virtual Context Clone()
             {
-                return (Context)MemberwiseClone();
+                return (Context) MemberwiseClone();
             }
 
             /// <summary>
@@ -1084,6 +1099,8 @@ namespace Adaptive.Aeron
             /// <summary>
             /// Set the top level Aeron directory used for communication between the client and Media Driver, and the location
             /// of the data buffers.
+            /// Check this setting if there is a DriverTimeoutException
+            /// The default path for communicating between the driver and client is based on the process owner's temp directory. %localappdata%\temp\aeron-[username]
             /// </summary>
             /// <param name="dirName"> New top level Aeron directory. </param>
             /// <returns> this Object for method chaining. </returns>
@@ -1134,14 +1151,16 @@ namespace Adaptive.Aeron
 
                 while (true)
                 {
-                    while (!cncFile.Exists)
+                    while (!cncFile.Exists || cncFile.Length <= 0)
                     {
                         if (_epochClock.Time() > (startTimeMs + _driverTimeoutMs))
                         {
-                            throw new DriverTimeoutException("CnC file not found: " + cncFile.FullName);
+                            throw new DriverTimeoutException("CnC file not created: " + cncFile.FullName);
                         }
 
                         Sleep(16);
+
+                        cncFile.Refresh();
                     }
 
                     _cncByteBuffer = IoUtil.MapExistingFile(CncFile(), CncFileDescriptor.CNC_FILE);

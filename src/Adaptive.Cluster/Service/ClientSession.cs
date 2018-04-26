@@ -16,6 +16,11 @@ namespace Adaptive.Cluster.Service
         /// </summary>
         public static readonly int SESSION_HEADER_LENGTH = MessageHeaderEncoder.ENCODED_LENGTH + SessionHeaderEncoder.BLOCK_LENGTH;
 
+        /// <summary>
+        /// Return value to indicate egress to a session is mocked out by the cluster when in follower mode.
+        /// </summary>
+        public const long MOCKED_OFFER = 1;
+        
         private readonly long _id;
         private readonly int _responseStreamId;
         private readonly string _responseChannel;
@@ -25,6 +30,7 @@ namespace Adaptive.Cluster.Service
         private readonly DirectBufferVector _messageBuffer = new DirectBufferVector();
         private readonly SessionHeaderEncoder _sessionHeaderEncoder = new SessionHeaderEncoder();
         private readonly ICluster _cluster;
+        private bool _isClosing;
 
         internal ClientSession(long sessionId, int responseStreamId, string responseChannel, byte[] encodedPrincipal, ICluster cluster)
         {
@@ -69,14 +75,19 @@ namespace Adaptive.Cluster.Service
         }
 
         /// <summary>
-        /// Cluster session encoded principal passed from <seealso cref="io.aeron.cluster.Authenticator"/>
-        /// when the session was authenticated.
+        /// Cluster session encoded principal from when the session was authenticated.
         /// </summary>
         /// <returns> The encoded Principal passed. May be 0 length to indicate none present. </returns>
         public byte[] EncodedPrincipal()
         {
             return _encodedPrincipal;
         }
+
+        /// <summary>
+        /// Indicates that a request to close this session has been made.
+        /// </summary>
+        /// <returns> whether a request to close this session has been made. </returns>
+        public bool IsClosing => _isClosing;
 
         /// <summary>
         /// Non-blocking publish of a partial buffer containing a message to a cluster.
@@ -86,12 +97,12 @@ namespace Adaptive.Cluster.Service
         /// <param name="offset">        offset in the buffer at which the encoded message begins. </param>
         /// <param name="length">        in bytes of the encoded message. </param>
         /// <returns> the same as <seealso cref="Publication#offer(DirectBuffer, int, int)"/> when in <seealso cref="Cluster.Role#LEADER"/>
-        /// otherwise 1. </returns>
+        /// otherwise <see cref="MOCKED_OFFER"/>. </returns>
         public long Offer(long correlationId, IDirectBuffer buffer, int offset, int length)
         {
             if (_cluster.Role() != ClusterRole.Leader)
             {
-                return 1;
+                return MOCKED_OFFER;
             }
 
             _sessionHeaderEncoder.CorrelationId(correlationId);
@@ -105,10 +116,15 @@ namespace Adaptive.Cluster.Service
         {
             if (null != _responsePublication)
             {
-                throw new InvalidOperationException("Response publication already present");
+                throw new InvalidOperationException("response publication already present");
             }
 
             _responsePublication = aeron.AddPublication(_responseChannel, _responseStreamId);
+        }
+
+        internal void MarkClosing()
+        {
+            _isClosing = true;
         }
 
         internal void Disconnect()

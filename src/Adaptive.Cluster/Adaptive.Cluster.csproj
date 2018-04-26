@@ -3,7 +3,7 @@
     <TargetFrameworks>netstandard2.0;net45</TargetFrameworks>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageId>Aeron.Cluster</PackageId>
-    <VersionPrefix>1.8.2</VersionPrefix>
+    <VersionPrefix>1.9.1</VersionPrefix>
     <Authors>Adaptive Financial Consulting Ltd.</Authors>
     <Company>Adaptive Financial Consulting Ltd.</Company>
     <Product>Clustering libraries over the Aeron transport</Product>
@@ -31,8 +31,5 @@
   <ItemGroup>
     <ProjectReference Include="..\Adaptive.Aeron\Adaptive.Aeron.csproj" />
     <ProjectReference Include="..\Adaptive.Archiver\Adaptive.Archiver.csproj" />
-  </ItemGroup>
-  <ItemGroup>
-    <Folder Include="Codecs" />
   </ItemGroup>
 </Project>

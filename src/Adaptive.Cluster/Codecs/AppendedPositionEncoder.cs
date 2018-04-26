@@ -10,7 +10,7 @@ namespace Adaptive.Cluster.Codecs {
 public class AppendedPositionEncoder
 {
     public const ushort BLOCK_LENGTH = 20;
-    public const ushort TEMPLATE_ID = 52;
+    public const ushort TEMPLATE_ID = 54;
     public const ushort SCHEMA_ID = 1;
     public const ushort SCHEMA_VERSION = 1;
 
@@ -96,32 +96,32 @@ public class AppendedPositionEncoder
         this._limit = limit;
     }
 
-    public static int TermPositionEncodingOffset()
+    public static int LogPositionEncodingOffset()
     {
         return 0;
     }
 
-    public static int TermPositionEncodingLength()
+    public static int LogPositionEncodingLength()
     {
         return 8;
     }
 
-    public static long TermPositionNullValue()
+    public static long LogPositionNullValue()
     {
         return -9223372036854775808L;
     }
 
-    public static long TermPositionMinValue()
+    public static long LogPositionMinValue()
     {
         return -9223372036854775807L;
     }
 
-    public static long TermPositionMaxValue()
+    public static long LogPositionMaxValue()
     {
         return 9223372036854775807L;
     }
 
-    public AppendedPositionEncoder TermPosition(long value)
+    public AppendedPositionEncoder LogPosition(long value)
     {
         _buffer.PutLong(_offset + 0, value, ByteOrder.LittleEndian);
         return this;

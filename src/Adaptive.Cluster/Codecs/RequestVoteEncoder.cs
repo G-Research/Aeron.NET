@@ -9,8 +9,8 @@ namespace Adaptive.Cluster.Codecs {
 
 public class RequestVoteEncoder
 {
-    public const ushort BLOCK_LENGTH = 28;
-    public const ushort TEMPLATE_ID = 50;
+    public const ushort BLOCK_LENGTH = 20;
+    public const ushort TEMPLATE_ID = 51;
     public const ushort SCHEMA_ID = 1;
     public const ushort SCHEMA_VERSION = 1;
 
@@ -96,9 +96,41 @@ public class RequestVoteEncoder
         this._limit = limit;
     }
 
-    public static int CandidateTermIdEncodingOffset()
+    public static int LogPositionEncodingOffset()
     {
         return 0;
+    }
+
+    public static int LogPositionEncodingLength()
+    {
+        return 8;
+    }
+
+    public static long LogPositionNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long LogPositionMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long LogPositionMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public RequestVoteEncoder LogPosition(long value)
+    {
+        _buffer.PutLong(_offset + 0, value, ByteOrder.LittleEndian);
+        return this;
+    }
+
+
+    public static int CandidateTermIdEncodingOffset()
+    {
+        return 8;
     }
 
     public static int CandidateTermIdEncodingLength()
@@ -123,78 +155,14 @@ public class RequestVoteEncoder
 
     public RequestVoteEncoder CandidateTermId(long value)
     {
-        _buffer.PutLong(_offset + 0, value, ByteOrder.LittleEndian);
-        return this;
-    }
-
-
-    public static int LastBaseLogPositionEncodingOffset()
-    {
-        return 8;
-    }
-
-    public static int LastBaseLogPositionEncodingLength()
-    {
-        return 8;
-    }
-
-    public static long LastBaseLogPositionNullValue()
-    {
-        return -9223372036854775808L;
-    }
-
-    public static long LastBaseLogPositionMinValue()
-    {
-        return -9223372036854775807L;
-    }
-
-    public static long LastBaseLogPositionMaxValue()
-    {
-        return 9223372036854775807L;
-    }
-
-    public RequestVoteEncoder LastBaseLogPosition(long value)
-    {
         _buffer.PutLong(_offset + 8, value, ByteOrder.LittleEndian);
-        return this;
-    }
-
-
-    public static int LastTermPositionEncodingOffset()
-    {
-        return 16;
-    }
-
-    public static int LastTermPositionEncodingLength()
-    {
-        return 8;
-    }
-
-    public static long LastTermPositionNullValue()
-    {
-        return -9223372036854775808L;
-    }
-
-    public static long LastTermPositionMinValue()
-    {
-        return -9223372036854775807L;
-    }
-
-    public static long LastTermPositionMaxValue()
-    {
-        return 9223372036854775807L;
-    }
-
-    public RequestVoteEncoder LastTermPosition(long value)
-    {
-        _buffer.PutLong(_offset + 16, value, ByteOrder.LittleEndian);
         return this;
     }
 
 
     public static int CandidateMemberIdEncodingOffset()
     {
-        return 24;
+        return 16;
     }
 
     public static int CandidateMemberIdEncodingLength()
@@ -219,7 +187,7 @@ public class RequestVoteEncoder
 
     public RequestVoteEncoder CandidateMemberId(int value)
     {
-        _buffer.PutInt(_offset + 24, value, ByteOrder.LittleEndian);
+        _buffer.PutInt(_offset + 16, value, ByteOrder.LittleEndian);
         return this;
     }
 

@@ -7,21 +7,21 @@ using Adaptive.Agrona;
 
 namespace Adaptive.Cluster.Codecs {
 
-public class AdminQueryDecoder
+public class CanvassPositionDecoder
 {
     public const ushort BLOCK_LENGTH = 20;
-    public const ushort TEMPLATE_ID = 9;
+    public const ushort TEMPLATE_ID = 50;
     public const ushort SCHEMA_ID = 1;
     public const ushort SCHEMA_VERSION = 1;
 
-    private AdminQueryDecoder _parentMessage;
+    private CanvassPositionDecoder _parentMessage;
     private IDirectBuffer _buffer;
     protected int _offset;
     protected int _limit;
     protected int _actingBlockLength;
     protected int _actingVersion;
 
-    public AdminQueryDecoder()
+    public CanvassPositionDecoder()
     {
         _parentMessage = this;
     }
@@ -61,7 +61,7 @@ public class AdminQueryDecoder
         return _offset;
     }
 
-    public AdminQueryDecoder Wrap(
+    public CanvassPositionDecoder Wrap(
         IDirectBuffer buffer, int offset, int actingBlockLength, int actingVersion)
     {
         this._buffer = buffer;
@@ -88,27 +88,27 @@ public class AdminQueryDecoder
         this._limit = limit;
     }
 
-    public static int CorrelationIdId()
+    public static int LogPositionId()
     {
         return 1;
     }
 
-    public static int CorrelationIdSinceVersion()
+    public static int LogPositionSinceVersion()
     {
         return 0;
     }
 
-    public static int CorrelationIdEncodingOffset()
+    public static int LogPositionEncodingOffset()
     {
         return 0;
     }
 
-    public static int CorrelationIdEncodingLength()
+    public static int LogPositionEncodingLength()
     {
         return 8;
     }
 
-    public static string CorrelationIdMetaAttribute(MetaAttribute metaAttribute)
+    public static string LogPositionMetaAttribute(MetaAttribute metaAttribute)
     {
         switch (metaAttribute)
         {
@@ -121,48 +121,48 @@ public class AdminQueryDecoder
         return "";
     }
 
-    public static long CorrelationIdNullValue()
+    public static long LogPositionNullValue()
     {
         return -9223372036854775808L;
     }
 
-    public static long CorrelationIdMinValue()
+    public static long LogPositionMinValue()
     {
         return -9223372036854775807L;
     }
 
-    public static long CorrelationIdMaxValue()
+    public static long LogPositionMaxValue()
     {
         return 9223372036854775807L;
     }
 
-    public long CorrelationId()
+    public long LogPosition()
     {
         return _buffer.GetLong(_offset + 0, ByteOrder.LittleEndian);
     }
 
 
-    public static int ClusterSessionIdId()
+    public static int LeadershipTermIdId()
     {
         return 2;
     }
 
-    public static int ClusterSessionIdSinceVersion()
+    public static int LeadershipTermIdSinceVersion()
     {
         return 0;
     }
 
-    public static int ClusterSessionIdEncodingOffset()
+    public static int LeadershipTermIdEncodingOffset()
     {
         return 8;
     }
 
-    public static int ClusterSessionIdEncodingLength()
+    public static int LeadershipTermIdEncodingLength()
     {
         return 8;
     }
 
-    public static string ClusterSessionIdMetaAttribute(MetaAttribute metaAttribute)
+    public static string LeadershipTermIdMetaAttribute(MetaAttribute metaAttribute)
     {
         switch (metaAttribute)
         {
@@ -175,48 +175,48 @@ public class AdminQueryDecoder
         return "";
     }
 
-    public static long ClusterSessionIdNullValue()
+    public static long LeadershipTermIdNullValue()
     {
         return -9223372036854775808L;
     }
 
-    public static long ClusterSessionIdMinValue()
+    public static long LeadershipTermIdMinValue()
     {
         return -9223372036854775807L;
     }
 
-    public static long ClusterSessionIdMaxValue()
+    public static long LeadershipTermIdMaxValue()
     {
         return 9223372036854775807L;
     }
 
-    public long ClusterSessionId()
+    public long LeadershipTermId()
     {
         return _buffer.GetLong(_offset + 8, ByteOrder.LittleEndian);
     }
 
 
-    public static int QueryTypeId()
+    public static int FollowerMemberIdId()
     {
         return 3;
     }
 
-    public static int QueryTypeSinceVersion()
+    public static int FollowerMemberIdSinceVersion()
     {
         return 0;
     }
 
-    public static int QueryTypeEncodingOffset()
+    public static int FollowerMemberIdEncodingOffset()
     {
         return 16;
     }
 
-    public static int QueryTypeEncodingLength()
+    public static int FollowerMemberIdEncodingLength()
     {
         return 4;
     }
 
-    public static string QueryTypeMetaAttribute(MetaAttribute metaAttribute)
+    public static string FollowerMemberIdMetaAttribute(MetaAttribute metaAttribute)
     {
         switch (metaAttribute)
         {
@@ -229,9 +229,24 @@ public class AdminQueryDecoder
         return "";
     }
 
-    public AdminQueryType QueryType()
+    public static int FollowerMemberIdNullValue()
     {
-        return (AdminQueryType)_buffer.GetInt(_offset + 16, ByteOrder.LittleEndian);
+        return -2147483648;
+    }
+
+    public static int FollowerMemberIdMinValue()
+    {
+        return -2147483647;
+    }
+
+    public static int FollowerMemberIdMaxValue()
+    {
+        return 2147483647;
+    }
+
+    public int FollowerMemberId()
+    {
+        return _buffer.GetInt(_offset + 16, ByteOrder.LittleEndian);
     }
 
 
@@ -245,7 +260,7 @@ public class AdminQueryDecoder
     {
         int originalLimit = Limit();
         Limit(_offset + _actingBlockLength);
-        builder.Append("[AdminQuery](sbeTemplateId=");
+        builder.Append("[CanvassPosition](sbeTemplateId=");
         builder.Append(TEMPLATE_ID);
         builder.Append("|sbeSchemaId=");
         builder.Append(SCHEMA_ID);
@@ -264,20 +279,20 @@ public class AdminQueryDecoder
         }
         builder.Append(BLOCK_LENGTH);
         builder.Append("):");
-        //Token{signal=BEGIN_FIELD, name='correlationId', referencedName='null', description='null', id=1, version=0, deprecated=0, encodedLength=0, offset=0, componentTokenCount=3, encoding=Encoding{presence=REQUIRED, primitiveType=null, byteOrder=LITTLE_ENDIAN, minValue=null, maxValue=null, nullValue=null, constValue=null, characterEncoding='null', epoch='unix', timeUnit=nanosecond, semanticType='null'}}
+        //Token{signal=BEGIN_FIELD, name='logPosition', referencedName='null', description='null', id=1, version=0, deprecated=0, encodedLength=0, offset=0, componentTokenCount=3, encoding=Encoding{presence=REQUIRED, primitiveType=null, byteOrder=LITTLE_ENDIAN, minValue=null, maxValue=null, nullValue=null, constValue=null, characterEncoding='null', epoch='unix', timeUnit=nanosecond, semanticType='null'}}
         //Token{signal=ENCODING, name='int64', referencedName='null', description='null', id=-1, version=0, deprecated=0, encodedLength=8, offset=0, componentTokenCount=1, encoding=Encoding{presence=REQUIRED, primitiveType=INT64, byteOrder=LITTLE_ENDIAN, minValue=null, maxValue=null, nullValue=null, constValue=null, characterEncoding='null', epoch='unix', timeUnit=nanosecond, semanticType='null'}}
-        builder.Append("CorrelationId=");
-        builder.Append(CorrelationId());
+        builder.Append("LogPosition=");
+        builder.Append(LogPosition());
         builder.Append('|');
-        //Token{signal=BEGIN_FIELD, name='clusterSessionId', referencedName='null', description='null', id=2, version=0, deprecated=0, encodedLength=0, offset=8, componentTokenCount=3, encoding=Encoding{presence=REQUIRED, primitiveType=null, byteOrder=LITTLE_ENDIAN, minValue=null, maxValue=null, nullValue=null, constValue=null, characterEncoding='null', epoch='unix', timeUnit=nanosecond, semanticType='null'}}
+        //Token{signal=BEGIN_FIELD, name='leadershipTermId', referencedName='null', description='null', id=2, version=0, deprecated=0, encodedLength=0, offset=8, componentTokenCount=3, encoding=Encoding{presence=REQUIRED, primitiveType=null, byteOrder=LITTLE_ENDIAN, minValue=null, maxValue=null, nullValue=null, constValue=null, characterEncoding='null', epoch='unix', timeUnit=nanosecond, semanticType='null'}}
         //Token{signal=ENCODING, name='int64', referencedName='null', description='null', id=-1, version=0, deprecated=0, encodedLength=8, offset=8, componentTokenCount=1, encoding=Encoding{presence=REQUIRED, primitiveType=INT64, byteOrder=LITTLE_ENDIAN, minValue=null, maxValue=null, nullValue=null, constValue=null, characterEncoding='null', epoch='unix', timeUnit=nanosecond, semanticType='null'}}
-        builder.Append("ClusterSessionId=");
-        builder.Append(ClusterSessionId());
+        builder.Append("LeadershipTermId=");
+        builder.Append(LeadershipTermId());
         builder.Append('|');
-        //Token{signal=BEGIN_FIELD, name='queryType', referencedName='null', description='null', id=3, version=0, deprecated=0, encodedLength=0, offset=16, componentTokenCount=6, encoding=Encoding{presence=REQUIRED, primitiveType=null, byteOrder=LITTLE_ENDIAN, minValue=null, maxValue=null, nullValue=null, constValue=null, characterEncoding='null', epoch='unix', timeUnit=nanosecond, semanticType='null'}}
-        //Token{signal=BEGIN_ENUM, name='AdminQueryType', referencedName='null', description='Type of admin qery', id=-1, version=0, deprecated=0, encodedLength=4, offset=16, componentTokenCount=4, encoding=Encoding{presence=REQUIRED, primitiveType=INT32, byteOrder=LITTLE_ENDIAN, minValue=null, maxValue=null, nullValue=null, constValue=null, characterEncoding='null', epoch='null', timeUnit=null, semanticType='null'}}
-        builder.Append("QueryType=");
-        builder.Append(QueryType());
+        //Token{signal=BEGIN_FIELD, name='followerMemberId', referencedName='null', description='null', id=3, version=0, deprecated=0, encodedLength=0, offset=16, componentTokenCount=3, encoding=Encoding{presence=REQUIRED, primitiveType=null, byteOrder=LITTLE_ENDIAN, minValue=null, maxValue=null, nullValue=null, constValue=null, characterEncoding='null', epoch='unix', timeUnit=nanosecond, semanticType='null'}}
+        //Token{signal=ENCODING, name='int32', referencedName='null', description='null', id=-1, version=0, deprecated=0, encodedLength=4, offset=16, componentTokenCount=1, encoding=Encoding{presence=REQUIRED, primitiveType=INT32, byteOrder=LITTLE_ENDIAN, minValue=null, maxValue=null, nullValue=null, constValue=null, characterEncoding='null', epoch='unix', timeUnit=nanosecond, semanticType='null'}}
+        builder.Append("FollowerMemberId=");
+        builder.Append(FollowerMemberId());
 
         Limit(originalLimit);
 

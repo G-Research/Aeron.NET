@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Security.Authentication;
-using System.Text;
 using Adaptive.Aeron;
 using Adaptive.Aeron.LogBuffer;
 using Adaptive.Agrona;
@@ -34,8 +33,7 @@ namespace Adaptive.Cluster.Client
         private readonly BufferClaim _bufferClaim = new BufferClaim();
         private readonly MessageHeaderEncoder _messageHeaderEncoder = new MessageHeaderEncoder();
         private readonly SessionKeepAliveRequestEncoder _keepAliveRequestEncoder = new SessionKeepAliveRequestEncoder();
-        private readonly AdminQueryEncoder _adminQueryEncoder = new AdminQueryEncoder();
-
+        
         /// <summary>
         /// Connect to the cluster using default configuration.
         /// </summary>
@@ -72,11 +70,11 @@ namespace Adaptive.Cluster.Client
                 _nanoClock = _aeron.Ctx().NanoClock();
                 _isUnicast = ctx.ClusterMemberEndpoints() != null;
 
-                publication = ConnectToCluster();
-                _publication = publication;
-
                 subscription = _aeron.AddSubscription(ctx.EgressChannel(), ctx.EgressStreamId());
                 _subscription = subscription;
+                
+                publication = ConnectToCluster();
+                _publication = publication;
 
                 _clusterSessionId = OpenSession();
             }
@@ -208,84 +206,6 @@ namespace Adaptive.Cluster.Client
             }
         }
 
-        /// <summary>
-        /// Query cluster member for endpoint information.
-        /// <para>
-        /// <code>
-        /// id=num,memberStatus=member-facing:port,log=log:port,archive=archive:port
-        /// </code>
-        ///     
-        /// </para>
-        /// </summary>
-        /// <returns> result of query. </returns>
-        public string QueryForEndpoints()
-        {
-            _lock.Lock();
-            try
-            {
-                long deadlineNs = _nanoClock.NanoTime() + _ctx.MessageTimeoutNs();
-                long correlationId = SendAdminQuery(AdminQueryType.ENDPOINTS, deadlineNs);
-                EgressPoller poller = new EgressPoller(_subscription, FRAGMENT_LIMIT);
-
-                while (true)
-                {
-                    PollNextResponse(deadlineNs, correlationId, poller);
-
-                    if (poller.CorrelationId() == correlationId)
-                    {
-                        if (poller.TemplateId() == AdminResponseDecoder.TEMPLATE_ID)
-                        {
-                            return Encoding.ASCII.GetString(poller.AdminResponseData()); // TODO check default charset for Java
-                        }
-                        else if (poller.EventCode() == EventCode.ERROR)
-                        {
-                            throw new InvalidOperationException(poller.Detail());
-                        }
-                    }
-                }
-            }
-            finally
-            {
-                _lock.Unlock();
-            }
-        }
-
-        /// <summary>
-        /// Query cluster member for recording log information.
-        /// </summary>
-        /// <returns> result of query. </returns>
-        public byte[] QueryForRecordingLog()
-        {
-            _lock.Lock();
-            try
-            {
-                long deadlineNs = _nanoClock.NanoTime() + _ctx.MessageTimeoutNs();
-                long correlationId = SendAdminQuery(AdminQueryType.RECORDING_LOG, deadlineNs);
-                EgressPoller poller = new EgressPoller(_subscription, FRAGMENT_LIMIT);
-
-                while (true)
-                {
-                    PollNextResponse(deadlineNs, correlationId, poller);
-
-                    if (poller.CorrelationId() == correlationId)
-                    {
-                        if (poller.TemplateId() == AdminResponseDecoder.TEMPLATE_ID)
-                        {
-                            return poller.AdminResponseData();
-                        }
-                        else if (poller.EventCode() == EventCode.ERROR)
-                        {
-                            throw new InvalidOperationException(poller.Detail());
-                        }
-                    }
-                }
-            }
-            finally
-            {
-                _lock.Unlock();
-            }
-        }
-
         private void CloseSession()
         {
             _idleStrategy.Reset();
@@ -368,7 +288,12 @@ namespace Adaptive.Cluster.Client
 
                     if (_nanoClock.NanoTime() > deadlineNs)
                     {
-                        throw new TimeoutException("Awaiting connection to cluster");
+                        for (int i = 0; i < memberCount; i++)
+                        {
+                            publications[i].Dispose();
+                        }
+                        
+                        throw new TimeoutException("awaiting connection to cluster");
                     }
 
                     _idleStrategy.Idle();
@@ -383,7 +308,7 @@ namespace Adaptive.Cluster.Client
                 {
                     if (_nanoClock.NanoTime() > deadlineNs)
                     {
-                        throw new TimeoutException("Awaiting connection to cluster");
+                        throw new TimeoutException("awaiting connection to cluster");
                     }
 
                     _idleStrategy.Idle();
@@ -408,7 +333,7 @@ namespace Adaptive.Cluster.Client
         private long OpenSession()
         {
             long deadlineNs = _nanoClock.NanoTime() + _ctx.MessageTimeoutNs();
-            long correlationId = SendConnectRequest(_ctx.CredentialsSupplier().ConnectRequestCredentialData(), deadlineNs);
+            long correlationId = SendConnectRequest(_ctx.CredentialsSupplier().EncodedCredentials(), deadlineNs);
             EgressPoller poller = new EgressPoller(_subscription, FRAGMENT_LIMIT);
 
             while (true)
@@ -417,10 +342,10 @@ namespace Adaptive.Cluster.Client
 
                 if (poller.CorrelationId() == correlationId)
                 {
-                    if (poller.Challenged())
+                    if (poller.IsChallenged())
                     {
-                        byte[] credentialData = _ctx.CredentialsSupplier().OnChallenge(poller.ChallengeData());
-                        correlationId = SendChallengeResponse(poller.ClusterSessionId(), credentialData, deadlineNs);
+                        byte[] encodedCredentials = _ctx.CredentialsSupplier().OnChallenge(poller.EncodedChallenge());
+                        correlationId = SendChallengeResponse(poller.ClusterSessionId(), encodedCredentials, deadlineNs);
                         continue;
                     }
 
@@ -447,19 +372,23 @@ namespace Adaptive.Cluster.Client
             {
                 if (_nanoClock.NanoTime() > deadlineNs)
                 {
-                    throw new TimeoutException("Awaiting response for correlationId=" + correlationId);
+                    throw new TimeoutException("awaiting response for correlationId=" + correlationId);
                 }
 
                 _idleStrategy.Idle();
             }
         }
 
-        private long SendConnectRequest(byte[] credentialData, long deadlineNs)
+        private long SendConnectRequest(byte[] encodedCredentials, long deadlineNs)
         {
             long correlationId = _aeron.NextCorrelationId();
 
             SessionConnectRequestEncoder sessionConnectRequestEncoder = new SessionConnectRequestEncoder();
-            int length = MessageHeaderEncoder.ENCODED_LENGTH + SessionConnectRequestEncoder.BLOCK_LENGTH + SessionConnectRequestEncoder.ResponseChannelHeaderLength() + _ctx.EgressChannel().Length + SessionConnectRequestEncoder.CredentialDataHeaderLength() + credentialData.Length;
+            int length = MessageHeaderEncoder.ENCODED_LENGTH + 
+                         SessionConnectRequestEncoder.BLOCK_LENGTH + 
+                         SessionConnectRequestEncoder.ResponseChannelHeaderLength() + 
+                         _ctx.EgressChannel().Length + 
+                         SessionConnectRequestEncoder.EncodedCredentialsHeaderLength() + encodedCredentials.Length;
 
             _idleStrategy.Reset();
 
@@ -472,7 +401,7 @@ namespace Adaptive.Cluster.Client
                         .CorrelationId(correlationId)
                         .ResponseStreamId(_ctx.EgressStreamId())
                         .ResponseChannel(_ctx.EgressChannel())
-                        .PutCredentialData(credentialData, 0, credentialData.Length);
+                        .PutEncodedCredentials(encodedCredentials, 0, encodedCredentials.Length);
 
                     _bufferClaim.Commit();
 
@@ -481,12 +410,12 @@ namespace Adaptive.Cluster.Client
 
                 if (Publication.CLOSED == result)
                 {
-                    throw new InvalidOperationException("Unexpected close from cluster");
+                    throw new InvalidOperationException("unexpected close from cluster");
                 }
 
                 if (_nanoClock.NanoTime() > deadlineNs)
                 {
-                    throw new TimeoutException("Failed to connect to cluster");
+                    throw new TimeoutException("failed to connect to cluster");
                 }
 
                 _idleStrategy.Idle();
@@ -495,50 +424,15 @@ namespace Adaptive.Cluster.Client
             return correlationId;
         }
 
-        private long SendAdminQuery(AdminQueryType queryType, long deadlineNs)
-        {
-            long correlationId = _aeron.NextCorrelationId();
-            int length = MessageHeaderEncoder.ENCODED_LENGTH + AdminQueryEncoder.BLOCK_LENGTH;
-            int attempts = SEND_ATTEMPTS;
-
-            _idleStrategy.Reset();
-
-            while (true)
-            {
-                long result = _publication.TryClaim(length, _bufferClaim);
-
-                if (result > 0)
-                {
-                    _adminQueryEncoder
-                        .WrapAndApplyHeader(_bufferClaim.Buffer, _bufferClaim.Offset, _messageHeaderEncoder)
-                        .CorrelationId(correlationId)
-                        .ClusterSessionId(_clusterSessionId)
-                        .QueryType(queryType);
-
-                    _bufferClaim.Commit();
-
-                    break;
-                }
-
-                CheckResult(result);
-
-                if (--attempts <= 0 || _nanoClock.NanoTime() > deadlineNs)
-                {
-                    throw new TimeoutException("Failed to send query");
-                }
-
-                _idleStrategy.Idle();
-            }
-
-            return correlationId;
-        }
-
-        private long SendChallengeResponse(long sessionId, byte[] credentialData, long deadlineNs)
+        private long SendChallengeResponse(long sessionId, byte[] encodedCredentials, long deadlineNs)
         {
             long correlationId = _aeron.NextCorrelationId();
 
             ChallengeResponseEncoder challengeResponseEncoder = new ChallengeResponseEncoder();
-            int length = MessageHeaderEncoder.ENCODED_LENGTH + ChallengeResponseEncoder.BLOCK_LENGTH + ChallengeResponseEncoder.CredentialDataHeaderLength() + credentialData.Length;
+            int length = MessageHeaderEncoder.ENCODED_LENGTH + 
+                         ChallengeResponseEncoder.BLOCK_LENGTH + 
+                         ChallengeResponseEncoder.EncodedCredentialsHeaderLength() + 
+                         encodedCredentials.Length;
 
             _idleStrategy.Reset();
 
@@ -547,7 +441,11 @@ namespace Adaptive.Cluster.Client
                 long result = _publication.TryClaim(length, _bufferClaim);
                 if (result > 0)
                 {
-                    challengeResponseEncoder.WrapAndApplyHeader(_bufferClaim.Buffer, _bufferClaim.Offset, _messageHeaderEncoder).CorrelationId(correlationId).ClusterSessionId(sessionId).PutCredentialData(credentialData, 0, credentialData.Length);
+                    challengeResponseEncoder
+                        .WrapAndApplyHeader(_bufferClaim.Buffer, _bufferClaim.Offset, _messageHeaderEncoder)
+                        .CorrelationId(correlationId)
+                        .ClusterSessionId(sessionId)
+                        .PutEncodedCredentials(encodedCredentials, 0, encodedCredentials.Length);
 
                     _bufferClaim.Commit();
 
@@ -558,7 +456,7 @@ namespace Adaptive.Cluster.Client
 
                 if (_nanoClock.NanoTime() > deadlineNs)
                 {
-                    throw new TimeoutException("Failed to connect to cluster");
+                    throw new TimeoutException("failed to connect to cluster");
                 }
 
                 _idleStrategy.Idle();
@@ -571,7 +469,7 @@ namespace Adaptive.Cluster.Client
         {
             if (result == Publication.NOT_CONNECTED || result == Publication.CLOSED || result == Publication.MAX_POSITION_EXCEEDED)
             {
-                throw new InvalidOperationException("Unexpected publication state: " + result);
+                throw new InvalidOperationException("unexpected publication state: " + result);
             }
         }
 

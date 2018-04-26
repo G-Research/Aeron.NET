@@ -9,8 +9,8 @@ namespace Adaptive.Cluster.Codecs {
 
 public class CommitPositionEncoder
 {
-    public const ushort BLOCK_LENGTH = 24;
-    public const ushort TEMPLATE_ID = 53;
+    public const ushort BLOCK_LENGTH = 20;
+    public const ushort TEMPLATE_ID = 55;
     public const ushort SCHEMA_ID = 1;
     public const ushort SCHEMA_VERSION = 1;
 
@@ -96,32 +96,32 @@ public class CommitPositionEncoder
         this._limit = limit;
     }
 
-    public static int TermPositionEncodingOffset()
+    public static int LogPositionEncodingOffset()
     {
         return 0;
     }
 
-    public static int TermPositionEncodingLength()
+    public static int LogPositionEncodingLength()
     {
         return 8;
     }
 
-    public static long TermPositionNullValue()
+    public static long LogPositionNullValue()
     {
         return -9223372036854775808L;
     }
 
-    public static long TermPositionMinValue()
+    public static long LogPositionMinValue()
     {
         return -9223372036854775807L;
     }
 
-    public static long TermPositionMaxValue()
+    public static long LogPositionMaxValue()
     {
         return 9223372036854775807L;
     }
 
-    public CommitPositionEncoder TermPosition(long value)
+    public CommitPositionEncoder LogPosition(long value)
     {
         _buffer.PutLong(_offset + 0, value, ByteOrder.LittleEndian);
         return this;
@@ -188,38 +188,6 @@ public class CommitPositionEncoder
     public CommitPositionEncoder LeaderMemberId(int value)
     {
         _buffer.PutInt(_offset + 16, value, ByteOrder.LittleEndian);
-        return this;
-    }
-
-
-    public static int LogSessionIdEncodingOffset()
-    {
-        return 20;
-    }
-
-    public static int LogSessionIdEncodingLength()
-    {
-        return 4;
-    }
-
-    public static int LogSessionIdNullValue()
-    {
-        return -2147483648;
-    }
-
-    public static int LogSessionIdMinValue()
-    {
-        return -2147483647;
-    }
-
-    public static int LogSessionIdMaxValue()
-    {
-        return 2147483647;
-    }
-
-    public CommitPositionEncoder LogSessionId(int value)
-    {
-        _buffer.PutInt(_offset + 20, value, ByteOrder.LittleEndian);
         return this;
     }
 

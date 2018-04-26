@@ -5,21 +5,21 @@ using System.Collections.Generic;
 using Adaptive.Agrona;
 
 
-namespace Adaptive.Cluster.Codecs {
+namespace Adaptive.Archiver.Codecs {
 
-public class AdminQueryEncoder
+public class TruncateRecordingRequestEncoder
 {
-    public const ushort BLOCK_LENGTH = 20;
-    public const ushort TEMPLATE_ID = 9;
+    public const ushort BLOCK_LENGTH = 32;
+    public const ushort TEMPLATE_ID = 13;
     public const ushort SCHEMA_ID = 1;
-    public const ushort SCHEMA_VERSION = 1;
+    public const ushort SCHEMA_VERSION = 0;
 
-    private AdminQueryEncoder _parentMessage;
+    private TruncateRecordingRequestEncoder _parentMessage;
     private IMutableDirectBuffer _buffer;
     protected int _offset;
     protected int _limit;
 
-    public AdminQueryEncoder()
+    public TruncateRecordingRequestEncoder()
     {
         _parentMessage = this;
     }
@@ -59,7 +59,7 @@ public class AdminQueryEncoder
         return _offset;
     }
 
-    public AdminQueryEncoder Wrap(IMutableDirectBuffer buffer, int offset)
+    public TruncateRecordingRequestEncoder Wrap(IMutableDirectBuffer buffer, int offset)
     {
         this._buffer = buffer;
         this._offset = offset;
@@ -68,7 +68,7 @@ public class AdminQueryEncoder
         return this;
     }
 
-    public AdminQueryEncoder WrapAndApplyHeader(
+    public TruncateRecordingRequestEncoder WrapAndApplyHeader(
         IMutableDirectBuffer buffer, int offset, MessageHeaderEncoder headerEncoder)
     {
         headerEncoder
@@ -96,9 +96,41 @@ public class AdminQueryEncoder
         this._limit = limit;
     }
 
-    public static int CorrelationIdEncodingOffset()
+    public static int ControlSessionIdEncodingOffset()
     {
         return 0;
+    }
+
+    public static int ControlSessionIdEncodingLength()
+    {
+        return 8;
+    }
+
+    public static long ControlSessionIdNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long ControlSessionIdMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long ControlSessionIdMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public TruncateRecordingRequestEncoder ControlSessionId(long value)
+    {
+        _buffer.PutLong(_offset + 0, value, ByteOrder.LittleEndian);
+        return this;
+    }
+
+
+    public static int CorrelationIdEncodingOffset()
+    {
+        return 8;
     }
 
     public static int CorrelationIdEncodingLength()
@@ -121,60 +153,76 @@ public class AdminQueryEncoder
         return 9223372036854775807L;
     }
 
-    public AdminQueryEncoder CorrelationId(long value)
-    {
-        _buffer.PutLong(_offset + 0, value, ByteOrder.LittleEndian);
-        return this;
-    }
-
-
-    public static int ClusterSessionIdEncodingOffset()
-    {
-        return 8;
-    }
-
-    public static int ClusterSessionIdEncodingLength()
-    {
-        return 8;
-    }
-
-    public static long ClusterSessionIdNullValue()
-    {
-        return -9223372036854775808L;
-    }
-
-    public static long ClusterSessionIdMinValue()
-    {
-        return -9223372036854775807L;
-    }
-
-    public static long ClusterSessionIdMaxValue()
-    {
-        return 9223372036854775807L;
-    }
-
-    public AdminQueryEncoder ClusterSessionId(long value)
+    public TruncateRecordingRequestEncoder CorrelationId(long value)
     {
         _buffer.PutLong(_offset + 8, value, ByteOrder.LittleEndian);
         return this;
     }
 
 
-    public static int QueryTypeEncodingOffset()
+    public static int RecordingIdEncodingOffset()
     {
         return 16;
     }
 
-    public static int QueryTypeEncodingLength()
+    public static int RecordingIdEncodingLength()
     {
-        return 4;
+        return 8;
     }
 
-    public AdminQueryEncoder QueryType(AdminQueryType value)
+    public static long RecordingIdNullValue()
     {
-        _buffer.PutInt(_offset + 16, (int)value, ByteOrder.LittleEndian);
+        return -9223372036854775808L;
+    }
+
+    public static long RecordingIdMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long RecordingIdMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public TruncateRecordingRequestEncoder RecordingId(long value)
+    {
+        _buffer.PutLong(_offset + 16, value, ByteOrder.LittleEndian);
         return this;
     }
+
+
+    public static int PositionEncodingOffset()
+    {
+        return 24;
+    }
+
+    public static int PositionEncodingLength()
+    {
+        return 8;
+    }
+
+    public static long PositionNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long PositionMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long PositionMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public TruncateRecordingRequestEncoder Position(long value)
+    {
+        _buffer.PutLong(_offset + 24, value, ByteOrder.LittleEndian);
+        return this;
+    }
+
 
 
     public override string ToString()
@@ -184,7 +232,7 @@ public class AdminQueryEncoder
 
     public StringBuilder AppendTo(StringBuilder builder)
     {
-        AdminQueryDecoder writer = new AdminQueryDecoder();
+        TruncateRecordingRequestDecoder writer = new TruncateRecordingRequestDecoder();
         writer.Wrap(_buffer, _offset, BLOCK_LENGTH, SCHEMA_VERSION);
 
         return writer.AppendTo(builder);

@@ -4,6 +4,7 @@ using System.IO;
 using Adaptive.Agrona;
 using Adaptive.Agrona.Concurrent;
 using Adaptive.Archiver;
+using Adaptive.Cluster.Codecs;
 
 namespace Adaptive.Cluster.Service
 {
@@ -56,10 +57,10 @@ namespace Adaptive.Cluster.Service
         {
             public readonly long recordingId;
             public readonly long leadershipTermId;
-            public readonly long logPosition;
+            public readonly long termBaseLogPosition;
             public readonly long termPosition;
             public readonly long timestamp;
-            public readonly int memberIdVote;
+            public readonly int votedForMemberId;
             public readonly int type;
             public readonly int entryIndex;
 
@@ -68,35 +69,69 @@ namespace Adaptive.Cluster.Service
             /// </summary>
             /// <param name="recordingId">      of the entry in an archive. </param>
             /// <param name="leadershipTermId"> of this entry. </param>
-            /// <param name="logPosition">      accumulated position of the log over leadership terms for the beginning of the term. </param>
+            /// <param name="termBaseLogPosition">      accumulated position of the log over leadership terms for the beginning of the term. </param>
             /// <param name="termPosition">     position reached within the current leadership term, same at leadership term length. </param>
             /// <param name="timestamp">        of this entry. </param>
-            /// <param name="memberIdVote">     which member this node voted for in the election. </param>
+            /// <param name="votedForMemberId">     which member this node voted for in the election. </param>
             /// <param name="type">             of the entry as a log of a term or a snapshot. </param>
             /// <param name="entryIndex">       of the entry on disk. </param>
             public Entry(
                 long recordingId,
                 long leadershipTermId,
-                long logPosition,
+                long termBaseLogPosition,
                 long termPosition,
                 long timestamp,
-                int memberIdVote,
+                int votedForMemberId,
                 int type,
                 int entryIndex)
             {
                 this.recordingId = recordingId;
                 this.leadershipTermId = leadershipTermId;
-                this.logPosition = logPosition;
+                this.termBaseLogPosition = termBaseLogPosition;
                 this.termPosition = termPosition;
                 this.timestamp = timestamp;
-                this.memberIdVote = memberIdVote;
+                this.votedForMemberId = votedForMemberId;
                 this.type = type;
                 this.entryIndex = entryIndex;
             }
 
+            public Entry(RecoveryPlanDecoder.StepsDecoder decoder)
+            {
+                this.recordingId = decoder.RecordingId();
+                this.leadershipTermId = decoder.LeadershipTermId();
+                this.termBaseLogPosition = decoder.TermBaseLogPosition();
+                this.termPosition = decoder.TermPosition();
+                this.timestamp = decoder.Timestamp();
+                this.votedForMemberId = decoder.VotedForMemberId();
+                this.type = decoder.EntryType();
+                this.entryIndex = decoder.EntryIndex();
+            }
+
+
+            public void Encode(RecoveryPlanEncoder.StepsEncoder encoder)
+            {
+                encoder
+                    .RecordingId(recordingId)
+                    .LeadershipTermId(leadershipTermId)
+                    .TermBaseLogPosition(termBaseLogPosition)
+                    .TermPosition(termPosition)
+                    .Timestamp(timestamp)
+                    .VotedForMemberId(votedForMemberId)
+                    .EntryType(type)
+                    .EntryIndex(entryIndex);
+            }
+
             public override string ToString()
             {
-                return "Entry{" + "recordingId=" + recordingId + ", leadershipTermId=" + leadershipTermId + ", logPosition=" + logPosition + ", termPosition=" + termPosition + ", timestamp=" + timestamp + ", memberIdVote=" + memberIdVote + ", type=" + type + ", entryIndex=" + entryIndex + '}';
+                return "Entry{" + "recordingId=" + recordingId +
+                       ", leadershipTermId=" + leadershipTermId +
+                       ", termBaseLogPosition=" + termBaseLogPosition +
+                       ", termPosition=" + termPosition +
+                       ", timestamp=" + timestamp +
+                       ", votedForMemberIdVote=" + votedForMemberId +
+                       ", type=" + type +
+                       ", entryIndex=" + entryIndex +
+                       '}';
             }
         }
 
@@ -107,19 +142,46 @@ namespace Adaptive.Cluster.Service
         {
             public readonly long recordingStartPosition;
             public readonly long recordingStopPosition;
+            public readonly int recordingSessionId;
             public readonly Entry entry;
 
-            public ReplayStep(long recordingStartPosition, long recordingStopPosition, Entry entry)
+            public ReplayStep(
+                long recordingStartPosition,
+                long recordingStopPosition,
+                int recordingSessionId,
+                Entry entry)
             {
                 this.recordingStartPosition = recordingStartPosition;
                 this.recordingStopPosition = recordingStopPosition;
+                this.recordingSessionId = recordingSessionId;
                 this.entry = entry;
+            }
+
+            public ReplayStep(RecoveryPlanDecoder.StepsDecoder decoder)
+            {
+                recordingStartPosition = decoder.RecordingStartPosition();
+                recordingStopPosition = decoder.RecordingStopPosition();
+                recordingSessionId = decoder.RecordingSessionId();
+                entry = new Entry(decoder);
+            }
+
+            public void Encode(RecoveryPlanEncoder.StepsEncoder encoder)
+            {
+                encoder
+                    .RecordingStartPosition(recordingStartPosition)
+                    .RecordingStopPosition(recordingStopPosition)
+                    .RecordingSessionId(recordingSessionId);
+                entry.Encode(encoder);
             }
 
             public override string ToString()
             {
-                return "ReplayStep{recordingStartPosition=" + recordingStartPosition +
-                       ", recordingStopPosition=" + recordingStopPosition + ", entry=" + entry + '}';
+                return "ReplayStep{" +
+                       "recordingStartPosition=" + recordingStartPosition +
+                       ", recordingStopPosition=" + recordingStopPosition +
+                       ", recordingSessionId=" + recordingSessionId +
+                       ", entry=" + entry +
+                       '}';
             }
         }
 
@@ -129,38 +191,115 @@ namespace Adaptive.Cluster.Service
         public class RecoveryPlan
         {
             public readonly long lastLeadershipTermId;
-            public readonly long lastLogPosition;
+            public readonly long lastTermBaseLogPosition;
             public readonly long lastTermPositionCommitted;
             public readonly long lastTermPositionAppended;
             public readonly ReplayStep snapshotStep;
             public readonly List<ReplayStep> termSteps;
+            public readonly RecoveryPlanEncoder encoder = new RecoveryPlanEncoder();
+            public readonly RecoveryPlanDecoder decoder = new RecoveryPlanDecoder();
 
             public RecoveryPlan(
                 long lastLeadershipTermId,
-                long lastLogPosition,
+                long lastTermBaseLogPosition,
                 long lastTermPositionCommitted,
                 long lastTermPositionAppended,
                 ReplayStep snapshotStep,
                 List<ReplayStep> termSteps)
             {
                 this.lastLeadershipTermId = lastLeadershipTermId;
-                this.lastLogPosition = lastLogPosition;
+                this.lastTermBaseLogPosition = lastTermBaseLogPosition;
                 this.lastTermPositionCommitted = lastTermPositionCommitted;
                 this.lastTermPositionAppended = lastTermPositionAppended;
                 this.snapshotStep = snapshotStep;
                 this.termSteps = termSteps;
             }
 
+            public RecoveryPlan(IDirectBuffer buffer, int offset)
+            {
+                decoder.Wrap(buffer, offset, RecoveryPlanDecoder.BLOCK_LENGTH, RecoveryPlanDecoder.SCHEMA_VERSION);
+
+                lastLeadershipTermId = decoder.LastLeadershipTermId();
+                lastTermBaseLogPosition = decoder.LastTermBaseLogPosition();
+                lastTermPositionCommitted = decoder.LastTermPositionCommitted();
+                lastTermPositionAppended = decoder.LastTermPositionAppended();
+
+                ReplayStep snapshot = null;
+                termSteps = new List<ReplayStep>();
+                int stepNumber = 0;
+
+                var stepDecoder = decoder.Steps();
+                for (var i = 0; i < stepDecoder.Count(); i++)
+                {
+                    if (0 == stepNumber && stepDecoder.EntryType() == ENTRY_TYPE_SNAPSHOT)
+                    {
+                        snapshot = new ReplayStep(stepDecoder);
+                    }
+                    else
+                    {
+                        termSteps.Add(new ReplayStep(stepDecoder));
+                    }
+
+                    stepNumber++;
+                    stepDecoder = stepDecoder.Next();
+                }
+
+                snapshotStep = snapshot;
+            }
+
+            public int EncodedLength()
+            {
+                int stepsCount = termSteps.Count + (null != snapshotStep ? 1 : 0);
+
+                return RecoveryPlanEncoder.BLOCK_LENGTH +
+                       RecoveryPlanEncoder.StepsEncoder.SbeHeaderSize() +
+                       stepsCount * RecoveryPlanEncoder.StepsEncoder.SbeBlockLength();
+            }
+
+            public int Encode(IMutableDirectBuffer buffer, int offset)
+            {
+                encoder
+                    .Wrap(buffer, offset)
+                    .LastLeadershipTermId(lastLeadershipTermId)
+                    .LastTermBaseLogPosition(lastTermBaseLogPosition)
+                    .LastTermPositionCommitted(lastTermPositionCommitted)
+                    .LastTermPositionAppended(lastTermPositionAppended);
+
+                int stepsCount = termSteps.Count + (null != snapshotStep ? 1 : 0);
+                RecoveryPlanEncoder.StepsEncoder stepEncoder = encoder.StepsCount(stepsCount);
+
+                if (null != snapshotStep)
+                {
+                    stepEncoder.Next();
+                    snapshotStep.Encode(stepEncoder);
+                }
+
+                for (int i = 0, size = termSteps.Count; i < size; i++)
+                {
+                    stepEncoder.Next();
+                    termSteps[i].Encode(stepEncoder);
+                }
+
+                return encoder.EncodedLength();
+            }
+
             public override string ToString()
             {
-                return "RecoveryPlan{" + "lastLeadershipTermId=" + lastLeadershipTermId + ", lastLogPosition=" + lastLogPosition + ", lastTermPositionCommitted=" + lastTermPositionCommitted + ", lastTermPositionAppended=" + lastTermPositionAppended + ", snapshotStep=" + snapshotStep + ", termSteps=" + termSteps + '}';
+                return "RecoveryPlan{" +
+                       "lastLeadershipTermId=" + lastLeadershipTermId +
+                       ", lastTermBaseLogPosition=" + lastTermBaseLogPosition +
+                       ", lastTermPositionCommitted=" + lastTermPositionCommitted +
+                       ", lastTermPositionAppended=" + lastTermPositionAppended +
+                       ", snapshotStep=" + snapshotStep +
+                       ", termSteps=" + termSteps +
+                       '}';
             }
         }
 
         /// <summary>
         /// Filename for the recording index for the history of log terms and snapshots.
         /// </summary>
-        public const string RECORDING_INDEX_FILE_NAME = "recording-index.log";
+        public const string RECORDING_LOG_FILE_NAME = "recording.log";
 
         /// <summary>
         /// Represents a value that is not set or invalid.
@@ -168,12 +307,12 @@ namespace Adaptive.Cluster.Service
         public const int NULL_VALUE = -1;
 
         /// <summary>
-        /// The index entry is for a recording of messages within a term to the consensus log.
+        /// The log entry is for a recording of messages within a term to the consensus log.
         /// </summary>
         public const int ENTRY_TYPE_TERM = 0;
 
         /// <summary>
-        /// The index entry is for a recording of a snapshot of state taken as of a position in the log.
+        /// The log entry is for a recording of a snapshot of state taken as of a position in the log.
         /// </summary>
         public const int ENTRY_TYPE_SNAPSHOT = 1;
 
@@ -188,14 +327,14 @@ namespace Adaptive.Cluster.Service
         public static readonly int LEADERSHIP_TERM_ID_OFFSET = RECORDING_ID_OFFSET + BitUtil.SIZE_OF_LONG;
 
         /// <summary>
-        /// The offset at which the absolute log position for the entry is stored.
+        /// The offset at which the log position as of the beginning of the term for the entry is stored.
         /// </summary>
-        public static readonly int LOG_POSITION_OFFSET = LEADERSHIP_TERM_ID_OFFSET + BitUtil.SIZE_OF_LONG;
+        public static readonly int TERM_BASE_LOG_POSITION_OFFSET = LEADERSHIP_TERM_ID_OFFSET + BitUtil.SIZE_OF_LONG;
 
         /// <summary>
         /// The offset at which the term position is stored.
         /// </summary>
-        public static readonly int TERM_POSITION_OFFSET = LOG_POSITION_OFFSET + BitUtil.SIZE_OF_LONG;
+        public static readonly int TERM_POSITION_OFFSET = TERM_BASE_LOG_POSITION_OFFSET + BitUtil.SIZE_OF_LONG;
 
         /// <summary>
         /// The offset at which the timestamp for the entry is stored.
@@ -220,21 +359,21 @@ namespace Adaptive.Cluster.Service
 
         private int nextEntryIndex;
         private readonly DirectoryInfo parentDir;
-        private readonly FileInfo indexFile;
+        private readonly FileInfo logFile;
         private readonly byte[] byteBuffer = new byte[4096];
-        private UnsafeBuffer buffer;
+        private readonly UnsafeBuffer buffer;
         private readonly List<Entry> entries = new List<Entry>();
 
         /// <summary>
-        /// Create an index that appends to an existing index or creates a new one.
+        /// Create a log that appends to an existing log or creates a new one.
         /// </summary>
-        /// <param name="parentDir"> in which the index will be created. </param>
+        /// <param name="parentDir"> in which the log will be created. </param>
         public RecordingLog(DirectoryInfo parentDir)
         {
             buffer = new UnsafeBuffer(byteBuffer);
 
             this.parentDir = parentDir;
-            indexFile = new FileInfo(Path.Combine(parentDir.FullName, RECORDING_INDEX_FILE_NAME));
+            logFile = new FileInfo(Path.Combine(parentDir.FullName, RECORDING_LOG_FILE_NAME));
 
             Reload();
         }
@@ -258,7 +397,7 @@ namespace Adaptive.Cluster.Service
         }
 
         /// <summary>
-        /// Reload the index from disk.
+        /// Reload the log from disk.
         /// </summary>
         public void Reload()
         {
@@ -267,9 +406,9 @@ namespace Adaptive.Cluster.Service
             FileStream fileChannel = null;
             try
             {
-                bool newFile = !indexFile.Exists;
+                bool newFile = !logFile.Exists;
 
-                fileChannel = new FileStream(indexFile.FullName, FileMode.OpenOrCreate, FileAccess.ReadWrite,
+                fileChannel = new FileStream(logFile.FullName, FileMode.OpenOrCreate, FileAccess.ReadWrite,
                     FileShare.ReadWrite, 4096, FileOptions.WriteThrough);
 
                 if (newFile)
@@ -300,9 +439,9 @@ namespace Adaptive.Cluster.Service
         }
 
         /// <summary>
-        /// Get the latest snapshot <seealso cref="Entry"/> in the index.
+        /// Get the latest snapshot <seealso cref="Entry"/> in the log.
         /// </summary>
-        /// <returns> the latest snapshot <seealso cref="Entry"/> in the index or null if no snapshot exists. </returns>
+        /// <returns> the latest snapshot <seealso cref="Entry"/> in the log or null if no snapshot exists. </returns>
         public Entry GetLatestSnapshot()
         {
             for (int i = entries.Count - 1; i >= 0; i--)
@@ -337,7 +476,7 @@ namespace Adaptive.Cluster.Service
             if (null != snapshotStep)
             {
                 lastLeadershipTermId = snapshotStep.entry.leadershipTermId;
-                lastLogPosition = snapshotStep.entry.logPosition;
+                lastLogPosition = snapshotStep.entry.termBaseLogPosition;
                 lastTermPositionCommitted = snapshotStep.entry.termPosition;
                 lastTermPositionAppended = lastTermPositionCommitted;
             }
@@ -349,76 +488,12 @@ namespace Adaptive.Cluster.Service
                 Entry entry = replayStep.entry;
 
                 lastLeadershipTermId = entry.leadershipTermId;
-                lastLogPosition = entry.logPosition;
+                lastLogPosition = entry.termBaseLogPosition;
                 lastTermPositionCommitted = entry.termPosition;
                 lastTermPositionAppended = replayStep.recordingStopPosition;
             }
 
             return new RecoveryPlan(lastLeadershipTermId, lastLogPosition, lastTermPositionCommitted, lastTermPositionAppended, snapshotStep, steps);
-        }
-
-        internal static ReplayStep PlanRecovery(List<ReplayStep> steps, List<Entry> entries, AeronArchive archive)
-        {
-            if (entries.Count == 0)
-            {
-                return null;
-            }
-
-            int snapshotIndex = -1;
-            for (int i = entries.Count - 1; i >= 0; i--)
-            {
-                Entry entry = entries[i];
-                if (ENTRY_TYPE_SNAPSHOT == entry.type)
-                {
-                    snapshotIndex = i;
-                }
-            }
-
-            ReplayStep snapshotStep;
-            RecordingExtent recordingExtent = new RecordingExtent();
-
-            if (-1 != snapshotIndex)
-            {
-                Entry snapshot = entries[snapshotIndex];
-                GetRecordingExtent(archive, recordingExtent, snapshot);
-
-                snapshotStep = new ReplayStep(recordingExtent.startPosition, recordingExtent.stopPosition, snapshot);
-
-                if (snapshotIndex - 1 >= 0)
-                {
-                    for (int i = snapshotIndex - 1; i >= 0; i--)
-                    {
-                        Entry entry = entries[i];
-                        if (ENTRY_TYPE_TERM == entry.type)
-                        {
-                            GetRecordingExtent(archive, recordingExtent, snapshot);
-                            long snapshotPosition = snapshot.logPosition + snapshot.termPosition;
-
-                            if (recordingExtent.stopPosition == AeronArchive.NULL_POSITION ||
-                                (entry.logPosition + recordingExtent.stopPosition) > snapshotPosition)
-                            {
-                                steps.Add(new ReplayStep(snapshot.termPosition, recordingExtent.stopPosition, entry));
-                            }
-
-                            break;
-                        }
-                    }
-                }
-            }
-            else
-            {
-                snapshotStep = null;
-            }
-
-            for (int i = snapshotIndex + 1, length = entries.Count; i < length; i++)
-            {
-                Entry entry = entries[i];
-                GetRecordingExtent(archive, recordingExtent, entry);
-
-                steps.Add(new ReplayStep(recordingExtent.startPosition, recordingExtent.stopPosition, entry));
-            }
-
-            return snapshotStep;
         }
 
         /// <summary>
@@ -443,14 +518,13 @@ namespace Adaptive.Cluster.Service
 
 
         /// <summary>
-        /// Append an index entry for a Raft term.
+        /// Append a log entry for a Raft term.
         /// </summary>
-        /// <param name="recordingId">      in the archive for the term. </param>
         /// <param name="leadershipTermId"> for the current term. </param>
         /// <param name="logPosition">      reached at the beginning of the term. </param>
         /// <param name="timestamp">        at the beginning of the term. </param>
-        /// <param name="memberIdVote">     in the leader election. </param>
-        public void AppendTerm(long recordingId, long leadershipTermId, long logPosition, long timestamp, int memberIdVote)
+        /// <param name="votedForMemberId">     in the leader election. </param>
+        public void AppendTerm(long leadershipTermId, long logPosition, long timestamp, int votedForMemberId)
         {
             int size = entries.Count;
             if (size > 0)
@@ -464,11 +538,11 @@ namespace Adaptive.Cluster.Service
                 }
             }
 
-            Append(ENTRY_TYPE_TERM, recordingId, leadershipTermId, logPosition, AeronArchive.NULL_POSITION, timestamp, memberIdVote);
+            Append(ENTRY_TYPE_TERM, NULL_VALUE, leadershipTermId, logPosition, AeronArchive.NULL_POSITION, timestamp, votedForMemberId);
         }
 
         /// <summary>
-        /// Append an index entry for a snapshot.
+        /// Append a log entry for a snapshot.
         /// </summary>
         /// <param name="recordingId">      in the archive for the snapshot. </param>
         /// <param name="leadershipTermId"> for the current term </param>
@@ -482,7 +556,7 @@ namespace Adaptive.Cluster.Service
             {
                 Entry entry = entries[size - 1];
 
-                if (entry.leadershipTermId != leadershipTermId)
+                if (entry.type == ENTRY_TYPE_TERM && entry.leadershipTermId != leadershipTermId)
                 {
                     throw new InvalidOperationException("leadershipTermId out of sequence: previous " + entry.leadershipTermId + " this " + leadershipTermId);
                 }
@@ -491,6 +565,28 @@ namespace Adaptive.Cluster.Service
             Append(ENTRY_TYPE_SNAPSHOT, recordingId, leadershipTermId, logPosition, termPosition, timestamp, NULL_VALUE);
         }
 
+        /// <summary>
+        /// Commit the recording id of the log for a leadership term.
+        /// </summary>
+        /// <param name="leadershipTermId"> for committing the recording id for the log. </param>
+        /// <param name="recordingId">      for the log of the leadership term. </param>
+        public void CommitLeadershipRecordingId(long leadershipTermId, long recordingId)
+        {
+            int index = GetLeadershipTermEntryIndex(leadershipTermId);
+
+            CommitEntryValue(index, recordingId, RECORDING_ID_OFFSET);
+
+            Entry entry = entries[index];
+            entries[index] = new Entry(
+                recordingId,
+                entry.leadershipTermId,
+                entry.termBaseLogPosition,
+                entry.termPosition,
+                entry.timestamp,
+                entry.votedForMemberId,
+                entry.type,
+                entry.entryIndex);
+        }
 
         /// <summary>
         /// Commit the position reached in a leadership term before a clean shutdown.
@@ -499,31 +595,43 @@ namespace Adaptive.Cluster.Service
         /// <param name="termPosition">     reached in the leadership term. </param>
         public void CommitLeadershipTermPosition(long leadershipTermId, long termPosition)
         {
-            int index = -1;
-            for (int i = 0, size = entries.Count; i < size; i++)
-            {
-                Entry entry = entries[i];
-                if (entry.leadershipTermId == leadershipTermId && entry.type == ENTRY_TYPE_TERM)
-                {
-                    index = entry.entryIndex;
-                    break;
-                }
-            }
+            int index = GetLeadershipTermEntryIndex(leadershipTermId);
 
-            if (-1 == index)
-            {
-                throw new ArgumentException("Unknown leadershipTermId: " + leadershipTermId);
-            }
+            CommitEntryValue(index, termPosition, TERM_POSITION_OFFSET);
 
-            buffer.PutLong(0, termPosition);
-            long filePosition = (index * ENTRY_LENGTH) + TERM_POSITION_OFFSET;
+            Entry entry = entries[index];
+            entries[index] = new Entry(
+                entry.recordingId,
+                entry.leadershipTermId,
+                entry.termBaseLogPosition,
+                termPosition,
+                entry.timestamp,
+                entry.votedForMemberId,
+                entry.type,
+                entry.entryIndex);
+        }
 
-            using (var fileChannel = new FileStream(indexFile.FullName, FileMode.Append, FileAccess.Write,
-                FileShare.ReadWrite, BitUtil.SIZE_OF_LONG, FileOptions.WriteThrough))
-            {
-                fileChannel.Position = filePosition;
-                fileChannel.Write(byteBuffer, 0, BitUtil.SIZE_OF_LONG); // Check 
-            }
+        /// <summary>
+        /// Commit the position for the base of a leadership term.
+        /// </summary>
+        /// <param name="leadershipTermId"> for committing the base position.. </param>
+        /// <param name="logPosition">      for the base of a leadership term. </param>
+        public void CommitLeadershipLogPosition(long leadershipTermId, long logPosition)
+        {
+            int index = GetLeadershipTermEntryIndex(leadershipTermId);
+
+            CommitEntryValue(index, logPosition, TERM_BASE_LOG_POSITION_OFFSET);
+
+            Entry entry = entries[index];
+            entries[index] = new Entry(
+                entry.recordingId,
+                entry.leadershipTermId,
+                logPosition,
+                entry.termPosition,
+                entry.timestamp,
+                entry.votedForMemberId,
+                entry.type,
+                entry.entryIndex);
         }
 
         /// <summary>
@@ -546,13 +654,13 @@ namespace Adaptive.Cluster.Service
 
             if (-1 == index)
             {
-                throw new System.ArgumentException("Unknown entry index: " + entryIndex);
+                throw new ArgumentException("unknown entry index: " + entryIndex);
             }
 
-            buffer.PutInt(0, NULL_VALUE);
+            buffer.PutInt(0, NULL_VALUE, ByteOrder.LittleEndian);
             long filePosition = (index * ENTRY_LENGTH) + ENTRY_TYPE_OFFSET;
 
-            using (var fileChannel = new FileStream(indexFile.FullName, FileMode.Append, FileAccess.Write,
+            using (var fileChannel = new FileStream(logFile.FullName, FileMode.Append, FileAccess.Write,
                 FileShare.ReadWrite, BitUtil.SIZE_OF_INT, FileOptions.WriteThrough))
             {
                 fileChannel.Position = filePosition;
@@ -560,24 +668,31 @@ namespace Adaptive.Cluster.Service
             }
         }
 
-
-        private void Append(int entryType, long recordingId, long leadershipTermId, long logPosition, long termPosition, long timestamp, int memberIdVote)
+        public override string ToString()
         {
-            buffer.PutLong(RECORDING_ID_OFFSET, recordingId);
-            buffer.PutLong(LOG_POSITION_OFFSET, logPosition);
-            buffer.PutLong(LEADERSHIP_TERM_ID_OFFSET, leadershipTermId);
-            buffer.PutLong(TIMESTAMP_OFFSET, timestamp);
-            buffer.PutLong(TERM_POSITION_OFFSET, termPosition);
-            buffer.PutInt(MEMBER_ID_VOTE_OFFSET, memberIdVote);
-            buffer.PutInt(ENTRY_TYPE_OFFSET, entryType);
-            
-            using (var fileChannel = new FileStream(indexFile.FullName, FileMode.Append, FileAccess.Write,
+            return "RecodingLog{" +
+                   "file=" + logFile.FullName +
+                   ", entries=" + entries +
+                   '}';
+        }
+
+        private void Append(int entryType, long recordingId, long leadershipTermId, long logPosition, long termPosition, long timestamp, int votedForMemberId)
+        {
+            buffer.PutLong(RECORDING_ID_OFFSET, recordingId, ByteOrder.LittleEndian);
+            buffer.PutLong(TERM_BASE_LOG_POSITION_OFFSET, logPosition, ByteOrder.LittleEndian);
+            buffer.PutLong(LEADERSHIP_TERM_ID_OFFSET, leadershipTermId, ByteOrder.LittleEndian);
+            buffer.PutLong(TIMESTAMP_OFFSET, timestamp, ByteOrder.LittleEndian);
+            buffer.PutLong(TERM_POSITION_OFFSET, termPosition, ByteOrder.LittleEndian);
+            buffer.PutInt(MEMBER_ID_VOTE_OFFSET, votedForMemberId, ByteOrder.LittleEndian);
+            buffer.PutInt(ENTRY_TYPE_OFFSET, entryType, ByteOrder.LittleEndian);
+
+            using (var fileChannel = new FileStream(logFile.FullName, FileMode.Append, FileAccess.Write,
                 FileShare.ReadWrite, 4096, FileOptions.WriteThrough))
             {
                 fileChannel.Write(byteBuffer, 0, ENTRY_LENGTH);
             }
 
-            entries.Add(new Entry(recordingId, leadershipTermId, logPosition, AeronArchive.NULL_POSITION, timestamp, memberIdVote, entryType, nextEntryIndex++));
+            entries.Add(new Entry(recordingId, leadershipTermId, logPosition, AeronArchive.NULL_POSITION, timestamp, votedForMemberId, entryType, nextEntryIndex++));
         }
 
         private void CaptureEntriesFromBuffer(int limit, UnsafeBuffer buffer, List<Entry> entries)
@@ -589,13 +704,13 @@ namespace Adaptive.Cluster.Service
                 if (NULL_VALUE != entryType)
                 {
                     entries.Add(new Entry(
-                        buffer.GetLong(i + RECORDING_ID_OFFSET), 
-                        buffer.GetLong(i + LEADERSHIP_TERM_ID_OFFSET), 
-                        buffer.GetLong(i + LOG_POSITION_OFFSET), 
-                        buffer.GetLong(i + TERM_POSITION_OFFSET), 
-                        buffer.GetLong(i + TIMESTAMP_OFFSET), 
-                        buffer.GetInt(i + MEMBER_ID_VOTE_OFFSET), 
-                        entryType, 
+                        buffer.GetLong(i + RECORDING_ID_OFFSET, ByteOrder.LittleEndian),
+                        buffer.GetLong(i + LEADERSHIP_TERM_ID_OFFSET, ByteOrder.LittleEndian),
+                        buffer.GetLong(i + TERM_BASE_LOG_POSITION_OFFSET, ByteOrder.LittleEndian),
+                        buffer.GetLong(i + TERM_POSITION_OFFSET, ByteOrder.LittleEndian),
+                        buffer.GetLong(i + TIMESTAMP_OFFSET, ByteOrder.LittleEndian),
+                        buffer.GetInt(i + MEMBER_ID_VOTE_OFFSET, ByteOrder.LittleEndian),
+                        entryType,
                         nextEntryIndex));
                 }
 
@@ -618,7 +733,101 @@ namespace Adaptive.Cluster.Service
         {
             if (archive.ListRecording(entry.recordingId, recordingExtent) == 0)
             {
-                throw new InvalidOperationException("Unknown recording id: " + entry.recordingId);
+                throw new InvalidOperationException("unknown recording id: " + entry.recordingId);
+            }
+        }
+
+        private int GetLeadershipTermEntryIndex(long leadershipTermId)
+        {
+            for (int i = 0, size = entries.Count; i < size; i++)
+            {
+                Entry entry = entries[i];
+                if (entry.leadershipTermId == leadershipTermId && entry.type == ENTRY_TYPE_TERM)
+                {
+                    return entry.entryIndex;
+                }
+            }
+
+            throw new ArgumentException("unknown leadershipTermId: " + leadershipTermId);
+        }
+
+        private static ReplayStep PlanRecovery(List<ReplayStep> steps, List<Entry> entries, AeronArchive archive)
+        {
+            if (entries.Count == 0)
+            {
+                return null;
+            }
+
+            int snapshotIndex = -1;
+            for (int i = entries.Count - 1; i >= 0; i--)
+            {
+                Entry entry = entries[i];
+                if (ENTRY_TYPE_SNAPSHOT == entry.type)
+                {
+                    snapshotIndex = i;
+                    break;
+                }
+            }
+
+            ReplayStep snapshotStep;
+            RecordingExtent recordingExtent = new RecordingExtent();
+
+            if (-1 != snapshotIndex)
+            {
+                Entry snapshot = entries[snapshotIndex];
+                GetRecordingExtent(archive, recordingExtent, snapshot);
+
+                snapshotStep = new ReplayStep(
+                    recordingExtent.startPosition, recordingExtent.stopPosition, recordingExtent.sessionId, snapshot);
+
+                if (snapshotIndex - 1 >= 0)
+                {
+                    for (int i = snapshotIndex - 1; i >= 0; i--)
+                    {
+                        Entry entry = entries[i];
+                        if (ENTRY_TYPE_TERM == entry.type)
+                        {
+                            GetRecordingExtent(archive, recordingExtent, entry);
+                            long snapshotPosition = snapshot.termBaseLogPosition + snapshot.termPosition;
+
+                            if (recordingExtent.stopPosition == AeronArchive.NULL_POSITION ||
+                                (entry.termBaseLogPosition + recordingExtent.stopPosition) > snapshotPosition)
+                            {
+                                steps.Add(new ReplayStep(
+                                    snapshot.termPosition, recordingExtent.stopPosition, recordingExtent.sessionId, entry));
+                            }
+
+                            break;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                snapshotStep = null;
+            }
+
+            for (int i = snapshotIndex + 1, length = entries.Count; i < length; i++)
+            {
+                Entry entry = entries[i];
+                GetRecordingExtent(archive, recordingExtent, entry);
+
+                steps.Add(new ReplayStep(recordingExtent.startPosition, recordingExtent.stopPosition, recordingExtent.sessionId, entry));
+            }
+
+            return snapshotStep;
+        }
+
+        private void CommitEntryValue(long entryIndex, long value, int fieldOffset)
+        {
+            buffer.PutLong(0, value, ByteOrder.LittleEndian);
+            long filePosition = (entryIndex * ENTRY_LENGTH) + fieldOffset;
+
+            using (var fileChannel = new FileStream(logFile.FullName, FileMode.Append, FileAccess.Write,
+                FileShare.ReadWrite, BitUtil.SIZE_OF_LONG, FileOptions.WriteThrough))
+            {
+                fileChannel.Position = filePosition;
+                fileChannel.Write(byteBuffer, 0, BitUtil.SIZE_OF_LONG); // Check 
             }
         }
     }

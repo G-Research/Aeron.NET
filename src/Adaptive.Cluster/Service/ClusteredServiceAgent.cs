@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Threading;
 using Adaptive.Aeron;
 using Adaptive.Aeron.LogBuffer;
@@ -29,12 +30,13 @@ namespace Adaptive.Cluster.Service
         private readonly CachedEpochClock cachedEpochClock = new CachedEpochClock();
         private readonly ClusterMarkFile markFile;
 
-        private long baseLogPosition = 0;
+        private long termBaseLogPosition;
         private long leadershipTermId;
         private long timestampMs;
         private BoundedLogAdapter logAdapter;
         private ActiveLog activeLog;
         private ReadableCounter roleCounter;
+        private AtomicCounter heartbeatCounter;
         private ClusterRole role = ClusterRole.Follower;
 
         internal ClusteredServiceAgent(ClusteredServiceContainer.Context ctx)
@@ -52,13 +54,11 @@ namespace Adaptive.Cluster.Service
             markFile = ctx.MarkFile();
 
 
-            serviceControlPublisher = new ServiceControlPublisher(
-                aeron.AddPublication(ctx.ServiceControlChannel(), ctx.ServiceControlStreamId())
-            );
+            var channel = ctx.ServiceControlChannel();
+            var streamId = ctx.ServiceControlStreamId();
 
-            serviceControlAdapter = new ServiceControlAdapter(
-                aeron.AddSubscription(ctx.ServiceControlChannel(), ctx.ServiceControlStreamId()), this
-            );
+            serviceControlPublisher = new ServiceControlPublisher(aeron.AddPublication(channel, streamId));
+            serviceControlAdapter = new ServiceControlAdapter(aeron.AddSubscription(channel, streamId), this);
         }
 
         public void OnStart()
@@ -66,12 +66,15 @@ namespace Adaptive.Cluster.Service
             service.OnStart(this);
 
             CountersReader counters = aeron.CountersReader();
-            int recoveryCounterId = AwaitRecoveryCounterId(counters);
+            int recoveryCounterId = AwaitRecoveryCounter(counters);
+            FindHeartbeatCounter(counters);
 
             isRecovering = true;
             CheckForSnapshot(counters, recoveryCounterId);
             CheckForReplay(counters, recoveryCounterId);
             isRecovering = false;
+
+            service.OnReady();
 
             JoinActiveLog(counters);
 
@@ -109,27 +112,15 @@ namespace Adaptive.Cluster.Service
             {
                 markFile.UpdateActivityTimestamp(nowMs);
                 cachedEpochClock.Update(nowMs);
+                CheckHealthAndUpdateHeartbeat(nowMs);
             }
 
             int workCount = logAdapter.Poll();
-            if (0 == workCount)
-            {
-                if (logAdapter.Image().Closed)
-                {
-                    throw new AgentTerminationException("Image closed unexpectedly");
-                }
-
-                if (!CommitPos.IsActive(aeron.CountersReader(), logAdapter.UpperBoundCounterId()))
-                {
-                    throw new AgentTerminationException("Commit position is not active");
-                }
-            }
-
             workCount += serviceControlAdapter.Poll();
+
             if (activeLog != null)
             {
-                // TODO: handle new log case
-                activeLog = null;
+                SwitchActiveLog();
             }
 
             return workCount;
@@ -162,9 +153,21 @@ namespace Adaptive.Cluster.Service
 
         public bool CloseSession(long clusterSessionId)
         {
-            if (sessionByIdMap.ContainsKey(clusterSessionId))
+            if (!sessionByIdMap.ContainsKey(clusterSessionId))
             {
-                serviceControlPublisher.CloseSession(clusterSessionId);
+                throw new ArgumentException("unknown clusterSessionId: " + clusterSessionId);
+            }
+
+            ClientSession clientSession = sessionByIdMap[clusterSessionId];
+
+            if (clientSession.IsClosing)
+            {
+                return true;
+            }
+
+            if (serviceControlPublisher.CloseSession(clusterSessionId))
+            {
+                clientSession.MarkClosing();
                 return true;
             }
 
@@ -176,14 +179,14 @@ namespace Adaptive.Cluster.Service
             return timestampMs;
         }
 
-        public void ScheduleTimer(long correlationId, long deadlineMs)
+        public bool ScheduleTimer(long correlationId, long deadlineMs)
         {
-            serviceControlPublisher.ScheduleTimer(correlationId, deadlineMs);
+            return serviceControlPublisher.ScheduleTimer(correlationId, deadlineMs);
         }
 
-        public void CancelTimer(long correlationId)
+        public bool CancelTimer(long correlationId)
         {
-            serviceControlPublisher.CancelTimer(correlationId);
+            return serviceControlPublisher.CancelTimer(correlationId);
         }
 
         public void OnScheduleTimer(long correlationId, long deadline)
@@ -201,10 +204,16 @@ namespace Adaptive.Cluster.Service
             // Not Implemented
         }
 
-        public void OnJoinLog(long leadershipTermId, int commitPositionId, int logSessionId, int logStreamId,
+        public void OnJoinLog(
+            long leadershipTermId,
+            int commitPositionId,
+            int logSessionId,
+            int logStreamId,
+            bool ackBeforeImage,
             string logChannel)
         {
-            activeLog = new ActiveLog(leadershipTermId, commitPositionId, logSessionId, logStreamId, logChannel);
+            activeLog = new ActiveLog(
+                leadershipTermId, commitPositionId, logSessionId, logStreamId, ackBeforeImage, logChannel);
         }
 
         public void OnServiceCloseSession(long clusterSessionId)
@@ -270,6 +279,14 @@ namespace Adaptive.Cluster.Service
             sessionByIdMap[clusterSessionId] = session;
         }
 
+        private void CheckHealthAndUpdateHeartbeat(long nowMs)
+        {
+            if (null != logAdapter && !logAdapter.Image().Closed)
+            {
+                heartbeatCounter.SetOrdered(nowMs);
+            }
+        }
+
         private void Role(ClusterRole newRole)
         {
             if (newRole != role)
@@ -290,15 +307,15 @@ namespace Adaptive.Cluster.Service
                 RecordingLog.Entry snapshotEntry = recordingLog.GetSnapshot(leadershipTermId, termPosition);
                 if (null == snapshotEntry)
                 {
-                    throw new System.InvalidOperationException(
-                        "No snapshot available for term position: " + termPosition);
+                    throw new InvalidOperationException(
+                        "no snapshot available for term position: " + termPosition);
                 }
 
-                baseLogPosition = snapshotEntry.logPosition;
+                termBaseLogPosition = snapshotEntry.termBaseLogPosition + snapshotEntry.termPosition;
                 LoadSnapshot(snapshotEntry.recordingId);
             }
 
-            serviceControlPublisher.AckAction(baseLogPosition, leadershipTermId, serviceId, ClusterAction.INIT);
+            serviceControlPublisher.AckAction(termBaseLogPosition, leadershipTermId, serviceId, ClusterAction.INIT);
         }
 
 
@@ -315,25 +332,27 @@ namespace Adaptive.Cluster.Service
             for (int i = 0; i < replayTermCount; i++)
             {
                 AwaitActiveLog();
-
                 int counterId = activeLog.commitPositionId;
-                baseLogPosition = CommitPos.GetBaseLogPosition(counters, counterId);
                 leadershipTermId = CommitPos.GetLeadershipTermId(counters, counterId);
+                termBaseLogPosition = CommitPos.GetTermBaseLogPosition(counters, counterId); // TODO MARK
 
-                using (Subscription subscription = aeron.AddSubscription(activeLog.channel, activeLog.streamId))
+                if (CommitPos.GetLeadershipTermLength(counters, counterId) > 0)
                 {
-                    serviceControlPublisher.AckAction(baseLogPosition, leadershipTermId, serviceId,
-                        ClusterAction.READY);
+                    using (Subscription subscription = aeron.AddSubscription(activeLog.channel, activeLog.streamId))
+                    {
+                        serviceControlPublisher.AckAction(termBaseLogPosition, leadershipTermId, serviceId, ClusterAction.READY);
 
-                    Image image = AwaitImage(activeLog.sessionId, subscription);
-                    ReadableCounter limit = new ReadableCounter(counters, counterId);
-                    BoundedLogAdapter adapter = new BoundedLogAdapter(image, limit, this);
+                        Image image = AwaitImage(activeLog.sessionId, subscription);
+                        ReadableCounter limit = new ReadableCounter(counters, counterId);
+                        BoundedLogAdapter adapter = new BoundedLogAdapter(image, limit, this);
 
-                    ConsumeImage(image, adapter);
+                        ConsumeImage(image, adapter);
 
-                    long logPosition = baseLogPosition + image.Position();
-                    serviceControlPublisher.AckAction(logPosition, leadershipTermId, serviceId, ClusterAction.REPLAY);
+                        termBaseLogPosition += image.Position();
+                    }
                 }
+
+                serviceControlPublisher.AckAction(termBaseLogPosition, leadershipTermId, serviceId, ClusterAction.REPLAY);
             }
 
             service.OnReplayEnd();
@@ -367,7 +386,7 @@ namespace Adaptive.Cluster.Service
                     {
                         if (!image.IsEndOfStream())
                         {
-                            throw new System.InvalidOperationException("Unexpected close of replay");
+                            throw new InvalidOperationException("unexpected close of replay");
                         }
 
                         break;
@@ -380,7 +399,29 @@ namespace Adaptive.Cluster.Service
             }
         }
 
-        private int AwaitRecoveryCounterId(CountersReader counters)
+        private void SwitchActiveLog()
+        {
+            if (logAdapter.IsCaughtUp())
+            {
+                logAdapter.Dispose();
+
+                var counters = aeron.CountersReader();
+                var counterId = activeLog.commitPositionId;
+
+                leadershipTermId = activeLog.leadershipTermId;
+                termBaseLogPosition = CommitPos.GetTermBaseLogPosition(counters, counterId);
+
+                Subscription subscription = aeron.AddSubscription(activeLog.channel, activeLog.streamId);
+                Image image = AwaitImage(activeLog.sessionId, subscription);
+                serviceControlPublisher.AckAction(termBaseLogPosition, leadershipTermId, serviceId, ClusterAction.READY);
+
+                logAdapter = new BoundedLogAdapter(image, new ReadableCounter(counters, counterId), this);
+                activeLog = null;
+                Role((ClusterRole) roleCounter.Get());
+            }
+        }
+
+        private int AwaitRecoveryCounter(CountersReader counters)
         {
             idleStrategy.Reset();
             int counterId = RecoveryState.FindCounterId(counters);
@@ -402,17 +443,27 @@ namespace Adaptive.Cluster.Service
             int commitPositionId = activeLog.commitPositionId;
             if (!CommitPos.IsActive(counters, commitPositionId))
             {
-                throw new System.InvalidOperationException("CommitPos counter not active: " + commitPositionId);
+                throw new InvalidOperationException("CommitPos counter not active: " + commitPositionId);
             }
 
             int logSessionId = activeLog.sessionId;
             leadershipTermId = activeLog.leadershipTermId;
-            baseLogPosition = CommitPos.GetBaseLogPosition(counters, commitPositionId);
+            termBaseLogPosition = CommitPos.GetTermBaseLogPosition(counters, commitPositionId);
 
             Subscription logSubscription = aeron.AddSubscription(activeLog.channel, activeLog.streamId);
-            Image image = AwaitImage(logSessionId, logSubscription);
 
-            serviceControlPublisher.AckAction(baseLogPosition, leadershipTermId, serviceId, ClusterAction.READY);
+            if (activeLog.ackBeforeImage)
+            {
+                serviceControlPublisher.AckAction(termBaseLogPosition, leadershipTermId, serviceId, ClusterAction.READY);
+            }
+
+            Image image = AwaitImage(logSessionId, logSubscription);
+            heartbeatCounter.SetOrdered(epochClock.Time());
+
+            if (!activeLog.ackBeforeImage)
+            {
+                serviceControlPublisher.AckAction(termBaseLogPosition, leadershipTermId, serviceId, ClusterAction.READY);
+            }
 
             logAdapter = new BoundedLogAdapter(image, new ReadableCounter(counters, commitPositionId), this);
             activeLog = null;
@@ -452,7 +503,7 @@ namespace Adaptive.Cluster.Service
                 RecordingExtent recordingExtent = new RecordingExtent();
                 if (0 == archive.ListRecording(recordingId, recordingExtent))
                 {
-                    throw new System.InvalidOperationException("Could not find recordingId: " + recordingId);
+                    throw new InvalidOperationException("could not find recordingId: " + recordingId);
                 }
 
                 string channel = ctx.ReplayChannel();
@@ -488,7 +539,7 @@ namespace Adaptive.Cluster.Service
 
                     if (image.Closed)
                     {
-                        throw new System.InvalidOperationException("Snapshot ended unexpectedly");
+                        throw new InvalidOperationException("snapshot ended unexpectedly");
                     }
 
                     idleStrategy.Idle(fragments);
@@ -511,7 +562,7 @@ namespace Adaptive.Cluster.Service
                     int counterId = AwaitRecordingCounter(publication, counters);
 
                     recordingId = RecordingPos.GetRecordingId(counters, counterId);
-                    SnapshotState(publication, baseLogPosition + termPosition);
+                    SnapshotState(publication, termBaseLogPosition + termPosition);
                     service.OnTakeSnapshot(publication);
 
                     AwaitRecordingComplete(recordingId, publication.Position, counters, counterId, archive);
@@ -522,12 +573,12 @@ namespace Adaptive.Cluster.Service
                 }
             }
 
-            recordingLog.AppendSnapshot(recordingId, leadershipTermId, baseLogPosition, termPosition, timestampMs);
+            recordingLog.AppendSnapshot(recordingId, leadershipTermId, termBaseLogPosition, termPosition, timestampMs);
         }
 
         private void AwaitRecordingComplete(
-            long recordingId, 
-            long completePosition, 
+            long recordingId,
+            long completePosition,
             CountersReader counters,
             int counterId,
             AeronArchive archive)
@@ -540,11 +591,10 @@ namespace Adaptive.Cluster.Service
 
                 if (!RecordingPos.IsActive(counters, counterId, recordingId))
                 {
-                    throw new System.InvalidOperationException("Recording has stopped unexpectedly: " + recordingId);
+                    throw new InvalidOperationException("recording has stopped unexpectedly: " + recordingId);
                 }
 
                 archive.CheckForErrorResponse();
-
             } while (counters.GetCounterValue(counterId) < completePosition);
         }
 
@@ -570,7 +620,7 @@ namespace Adaptive.Cluster.Service
                 return;
             }
 
-            long logPosition = baseLogPosition + termPosition;
+            long logPosition = termBaseLogPosition + termPosition;
 
             switch (action)
             {
@@ -606,6 +656,17 @@ namespace Adaptive.Cluster.Service
             return counterId;
         }
 
+        private void FindHeartbeatCounter(CountersReader counters)
+        {
+            var heartbeatCounterId = ServiceHeartbeat.FindCounterId(counters, ctx.ServiceId());
+
+            if (CountersReader.NULL_COUNTER_ID == heartbeatCounterId)
+            {
+                throw new InvalidOperationException("failed to find heartbeat counter");
+            }
+
+            heartbeatCounter = new AtomicCounter(counters.ValuesBuffer, heartbeatCounterId);
+        }
 
         private static void CheckInterruptedStatus()
         {
@@ -615,7 +676,7 @@ namespace Adaptive.Cluster.Service
             }
             catch (ThreadInterruptedException)
             {
-                throw new AgentTerminationException("Unexpected interrupt during operation");
+                throw new AgentTerminationException("unexpected interrupt during operation");
             }
         }
 
@@ -625,14 +686,22 @@ namespace Adaptive.Cluster.Service
             internal readonly int commitPositionId;
             internal readonly int sessionId;
             internal readonly int streamId;
+            internal readonly bool ackBeforeImage;
             internal readonly string channel;
 
-            internal ActiveLog(long leadershipTermId, int commitPositionId, int sessionId, int streamId, string channel)
+            internal ActiveLog(
+                long leadershipTermId,
+                int commitPositionId,
+                int sessionId,
+                int streamId,
+                bool ackBeforeImage,
+                string channel)
             {
                 this.leadershipTermId = leadershipTermId;
                 this.commitPositionId = commitPositionId;
                 this.sessionId = sessionId;
                 this.streamId = streamId;
+                this.ackBeforeImage = ackBeforeImage;
                 this.channel = channel;
             }
         }
